@@ -16,6 +16,7 @@ const schema = z.object({
     .default("other"),
   note: z.string().optional(),
   category: z.string().max(40).optional(),
+  image_url: z.string().url().optional(), // uploaded screenshot/image
 });
 
 function sourceKindFrom(url: string | undefined): string | null {
@@ -29,8 +30,8 @@ export async function savesRoutes(app: FastifyInstance) {
   app.post("/saves", async (req, reply) => {
     const userId = await requireUserId(req);
     const body = schema.parse(req.body ?? {});
-    if (!body.source_url && !body.media_upload_id) {
-      throw badRequest("source_url or media_upload_id required");
+    if (!body.source_url && !body.media_upload_id && !body.image_url) {
+      throw badRequest("source_url, media_upload_id or image_url required");
     }
     if (!(await isMember(userId, body.board_id))) throw forbidden("not a board member");
 
@@ -43,9 +44,13 @@ export async function savesRoutes(app: FastifyInstance) {
       body.category && body.type_guess === "place"
         ? JSON.stringify({ kind: "place", category: body.category })
         : null;
+    // An uploaded image is already "the content" — mark it ready with the image
+    // as its thumbnail and skip the extraction pipeline.
+    const isImage = Boolean(body.image_url);
+    const status = isImage ? "ready" : "pending";
     let card = await one<any>(
-      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted)
-       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,'pending',$7,$8::jsonb)
+      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted, thumb_url)
+       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
        ON CONFLICT (id) DO NOTHING
        RETURNING *`,
       [
@@ -55,8 +60,10 @@ export async function savesRoutes(app: FastifyInstance) {
         body.source_url ?? null,
         sourceKindFrom(body.source_url),
         body.type_guess,
+        status,
         body.note ?? null,
         seededExtracted,
+        body.image_url ?? null,
       ]
     );
 
@@ -64,6 +71,12 @@ export async function savesRoutes(app: FastifyInstance) {
       // Conflict: the card already exists — return it unchanged.
       card = await one<any>("SELECT * FROM cards WHERE id = $1", [id]);
       reply.code(200);
+      return serialize.card(card);
+    }
+
+    // Image saves are already ready — no extraction to run.
+    if (isImage) {
+      reply.code(201);
       return serialize.card(card);
     }
 
