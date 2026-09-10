@@ -48,9 +48,12 @@ export async function savesRoutes(app: FastifyInstance) {
     // as its thumbnail and skip the extraction pipeline.
     const isImage = Boolean(body.image_url);
     const status = isImage ? "ready" : "pending";
+    // Image cards skip extraction, so give them a title now; link/post cards get
+    // theirs from extraction.
+    const title = isImage ? "Screenshot" : null;
     let card = await one<any>(
-      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted, thumb_url)
-       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted, thumb_url, title)
+       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
        ON CONFLICT (id) DO NOTHING
        RETURNING *`,
       [
@@ -64,6 +67,7 @@ export async function savesRoutes(app: FastifyInstance) {
         body.note ?? null,
         seededExtracted,
         body.image_url ?? null,
+        title,
       ]
     );
 
