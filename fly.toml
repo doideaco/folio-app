@@ -1,0 +1,31 @@
+# Fly.io config for the Folio backend.
+# Deploy: `fly launch --no-deploy` (creates the app), set secrets, then `fly deploy`.
+# Scale-to-zero: the machine stops when idle and cold-starts on the next request,
+# so an idle app costs ~nothing.
+
+app = "folio-backend"
+primary_region = "lhr"   # London — closest Fly region to the UK
+
+[build]
+  # Uses the repo Dockerfile (runs via tsx, self-migrates the schema on boot).
+
+[env]
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

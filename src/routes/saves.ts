@@ -1,0 +1,82 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { one, q, serialize } from "../db.js";
+import { requireUserId } from "../auth.js";
+import { forbidden, badRequest } from "../errors.js";
+import { isMember } from "./boards.js";
+import { runExtraction } from "../extraction.js";
+
+const schema = z.object({
+  id: z.string().uuid().optional(), // client-generated card id (idempotency key)
+  source_url: z.string().url().optional(),
+  media_upload_id: z.string().optional(),
+  board_id: z.string().uuid(),
+  type_guess: z
+    .enum(["recipe", "place", "interior", "fit", "link", "other"])
+    .default("other"),
+  note: z.string().optional(),
+  category: z.string().max(40).optional(),
+});
+
+function sourceKindFrom(url: string | undefined): string | null {
+  if (!url) return "media";
+  if (/\/reels?\//.test(url)) return "reel";
+  if (/\/(p|tv|share)\//.test(url)) return "post";
+  return "post";
+}
+
+export async function savesRoutes(app: FastifyInstance) {
+  app.post("/saves", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const body = schema.parse(req.body ?? {});
+    if (!body.source_url && !body.media_upload_id) {
+      throw badRequest("source_url or media_upload_id required");
+    }
+    if (!(await isMember(userId, body.board_id))) throw forbidden("not a board member");
+
+    // Idempotent on the client-provided id: a retried/concurrent save with the
+    // same id returns the existing card instead of creating a duplicate.
+    const id = body.id ?? null;
+    // Seed the extracted place shape with the user's chosen category so it's
+    // preserved through extraction (which reads it back as a fallback).
+    const seededExtracted =
+      body.category && body.type_guess === "place"
+        ? JSON.stringify({ kind: "place", category: body.category })
+        : null;
+    let card = await one<any>(
+      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted)
+       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,'pending',$7,$8::jsonb)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING *`,
+      [
+        id,
+        body.board_id,
+        userId,
+        body.source_url ?? null,
+        sourceKindFrom(body.source_url),
+        body.type_guess,
+        body.note ?? null,
+        seededExtracted,
+      ]
+    );
+
+    if (!card && id) {
+      // Conflict: the card already exists — return it unchanged.
+      card = await one<any>("SELECT * FROM cards WHERE id = $1", [id]);
+      reply.code(200);
+      return serialize.card(card);
+    }
+
+    await q(
+      `INSERT INTO card_extraction_state (card_id, next_stage) VALUES ($1,'fetch')
+       ON CONFLICT (card_id) DO NOTHING`,
+      [card.id]
+    );
+
+    // Kick the (stub) extraction pipeline; the client polls /sync for progress.
+    void runExtraction(card.id);
+
+    reply.code(202);
+    return serialize.card(card);
+  });
+}

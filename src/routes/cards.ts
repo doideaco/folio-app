@@ -1,0 +1,172 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { one, serialize } from "../db.js";
+import { requireUserId } from "../auth.js";
+import { forbidden, notFound } from "../errors.js";
+import { isMember } from "./boards.js";
+import { runExtraction } from "../extraction.js";
+
+async function cardBoardId(cardId: string): Promise<string | null> {
+  const row = await one<{ board_id: string }>("SELECT board_id FROM cards WHERE id = $1", [cardId]);
+  return row?.board_id ?? null;
+}
+
+const patchSchema = z.object({
+  board_id: z.string().uuid().optional(),
+  type: z.enum(["recipe", "place", "interior", "fit", "link", "other"]).optional(),
+  tried_at: z.string().datetime().nullable().optional(),
+  clear_tried: z.boolean().optional(),
+  user_note: z.string().nullable().optional(),
+  background: z.string().max(60).nullable().optional(),
+  lat: z.number().optional(),
+  lng: z.number().optional(),
+  place_address: z.string().max(300).optional(),
+  place_category: z.string().max(40).optional(),
+  place_phone: z.string().max(60).optional(),
+  place_website: z.string().max(500).optional(),
+});
+
+export async function cardsRoutes(app: FastifyInstance) {
+  // POST /cards/:id/comments
+  app.post("/cards/:id/comments", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const { body } = z.object({ body: z.string().min(1) }).parse(req.body ?? {});
+    const comment = await one<any>(
+      `INSERT INTO card_comments (card_id, user_id, body) VALUES ($1,$2,$3) RETURNING *`,
+      [id, userId, body]
+    );
+    reply.code(201);
+    return serialize.comment(comment);
+  });
+
+  // PUT /cards/:id/rating — set the caller's personal 1–5 rating (upsert).
+  app.put("/cards/:id/rating", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const { rating } = z.object({ rating: z.number().int().min(1).max(5) }).parse(req.body ?? {});
+    const row = await one<any>(
+      `INSERT INTO card_ratings (card_id, user_id, rating) VALUES ($1,$2,$3)
+       ON CONFLICT (card_id, user_id) DO UPDATE SET rating = EXCLUDED.rating, updated_at = now()
+       RETURNING *`,
+      [id, userId, rating]
+    );
+    return serialize.rating(row);
+  });
+
+  // DELETE /cards/:id/rating — clear the caller's rating.
+  app.delete("/cards/:id/rating", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    await one("DELETE FROM card_ratings WHERE card_id = $1 AND user_id = $2", [id, userId]);
+    reply.code(204);
+    return null;
+  });
+
+  // POST /cards/:id/reextract — re-run extraction (e.g. card came back thin).
+  app.post("/cards/:id/reextract", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+
+    await one(
+      `INSERT INTO card_extraction_state (card_id, attempts, next_stage, next_retry_at, last_error)
+       VALUES ($1, 0, 'fetch', now(), NULL)
+       ON CONFLICT (card_id) DO UPDATE SET attempts = 0, next_retry_at = now(), last_error = NULL`,
+      [id]
+    );
+    await one(`UPDATE cards SET status='pending', updated_at=now() WHERE id = $1`, [id]);
+    void runExtraction(id);
+
+    reply.code(202);
+    const card = await one<any>("SELECT * FROM cards WHERE id = $1", [id]);
+    return serialize.card(card);
+  });
+
+  // PATCH /cards/:id
+  app.patch("/cards/:id", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const patch = patchSchema.parse(req.body ?? {});
+
+    if (patch.board_id && !(await isMember(userId, patch.board_id))) {
+      throw forbidden("not a member of target board");
+    }
+
+    const sets: string[] = [];
+    const vals: unknown[] = [id];
+    const push = (col: string, val: unknown) => {
+      vals.push(val);
+      sets.push(`${col} = $${vals.length}`);
+    };
+    if (patch.board_id !== undefined) push("board_id", patch.board_id);
+    if (patch.type !== undefined) push("type", patch.type);
+    if (patch.tried_at !== undefined) push("tried_at", patch.tried_at);
+    else if (patch.clear_tried) push("tried_at", null);
+    if (patch.user_note !== undefined) push("user_note", patch.user_note);
+    if (patch.background !== undefined) push("background", patch.background || null);
+    // Merge geocoded coordinates in, forcing a place shape (keeps any existing
+    // name, else uses the title) so a card set-as-place becomes mappable.
+    if (patch.lat !== undefined && patch.lng !== undefined) {
+      vals.push(patch.lat); const a = vals.length;
+      vals.push(patch.lng); const b = vals.length;
+      sets.push(
+        `extracted = coalesce(extracted, '{}'::jsonb) || jsonb_build_object(
+           'kind','place', 'lat', $${a}::float8, 'lng', $${b}::float8,
+           'name', coalesce(extracted->'name', to_jsonb(title)))`
+      );
+    }
+    // Merge enriched place detail (address/category/phone/website) into the
+    // extracted place shape. Only provided fields are set.
+    const placeFields: Array<[string, unknown]> = [];
+    if (patch.place_address !== undefined) placeFields.push(["address", patch.place_address]);
+    if (patch.place_category !== undefined) placeFields.push(["category", patch.place_category]);
+    if (patch.place_phone !== undefined) placeFields.push(["phone", patch.place_phone]);
+    if (patch.place_website !== undefined) placeFields.push(["website", patch.place_website]);
+    if (placeFields.length > 0) {
+      const objArgs = placeFields
+        .map(([key, value]) => {
+          vals.push(value);
+          return `'${key}', $${vals.length}::text`;
+        })
+        .join(", ");
+      sets.push(
+        `extracted = coalesce(extracted, jsonb_build_object('kind','place')) || jsonb_build_object(${objArgs})`
+      );
+    }
+    sets.push("updated_at = now()");
+
+    const card = await one<any>(
+      `UPDATE cards SET ${sets.join(", ")} WHERE id = $1 RETURNING *`,
+      vals
+    );
+    if (!card) throw notFound();
+    return serialize.card(card);
+  });
+
+  // DELETE /cards/:id
+  app.delete("/cards/:id", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) {
+      reply.code(204);
+      return null;
+    }
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    await one("DELETE FROM cards WHERE id = $1", [id]);
+    reply.code(204);
+    return null;
+  });
+}

@@ -1,0 +1,36 @@
+import Fastify, { type FastifyInstance } from "fastify";
+import { ZodError } from "zod";
+import { AppError } from "./errors.js";
+import { authRoutes } from "./routes/auth.js";
+import { boardsRoutes } from "./routes/boards.js";
+import { savesRoutes } from "./routes/saves.js";
+import { cardsRoutes } from "./routes/cards.js";
+import { syncRoutes } from "./routes/sync.js";
+
+export function buildApp(): FastifyInstance {
+  const app = Fastify({
+    // Privacy: log method + url only, never bodies.
+    logger: { level: "info", serializers: { req: (r) => ({ method: r.method, url: r.url }) } },
+  });
+
+  app.setErrorHandler((error, _req, reply) => {
+    if (error instanceof AppError) {
+      return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+    }
+    if (error instanceof ZodError) {
+      return reply.code(422).send({ error: "validation_failed", details: error.issues });
+    }
+    app.log.error(error);
+    return reply.code(500).send({ error: "internal_error" });
+  });
+
+  app.get("/healthz", async () => ({ ok: true }));
+
+  app.register(authRoutes);
+  app.register(boardsRoutes);
+  app.register(savesRoutes);
+  app.register(cardsRoutes);
+  app.register(syncRoutes);
+
+  return app;
+}

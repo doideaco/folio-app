@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: folio
+      POSTGRES_PASSWORD: folio
+      POSTGRES_DB: folio
+    ports:
+      - "5433:5432"
+    volumes:
+      - folio_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U folio"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  folio_pg: {}

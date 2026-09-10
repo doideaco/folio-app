@@ -1,0 +1,21 @@
+name: Fly Deploy
+
+# Auto-deploy the backend to Fly.io on every push to main.
+# Requires a repo secret FLY_API_TOKEN (create with: fly tokens create deploy -x 999999h)
+# and add it under GitHub → Settings → Secrets and variables → Actions.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to Fly
+    runs-on: ubuntu-latest
+    concurrency: deploy-group   # never run two deploys at once
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
