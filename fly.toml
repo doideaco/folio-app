@@ -3,7 +3,7 @@
 # Scale-to-zero: the machine stops when idle and cold-starts on the next request,
 # so an idle app costs ~nothing.
 
-app = "folio-backend"
+app = "folio-doidea"
 primary_region = "iad"   # US-East (Virginia) — co-located with the Neon DB (us-east-2)
 
 [build]
