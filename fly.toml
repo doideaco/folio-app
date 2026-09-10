@@ -4,7 +4,7 @@
 # so an idle app costs ~nothing.
 
 app = "folio-backend"
-primary_region = "lhr"   # London — closest Fly region to the UK
+primary_region = "iad"   # US-East (Virginia) — co-located with the Neon DB (us-east-2)
 
 [build]
   # Uses the repo Dockerfile (runs via tsx, self-migrates the schema on boot).
