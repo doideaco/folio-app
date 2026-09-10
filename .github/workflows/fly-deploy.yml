@@ -1,18 +1,34 @@
-name: Fly Deploy
+name: CI & Deploy
 
-# Auto-deploy the backend to Fly.io on every push to main.
+# On PRs: typecheck only (no deploy). On push to main: typecheck, then deploy to Fly.
 # Requires a repo secret FLY_API_TOKEN (create with: fly tokens create deploy -x 999999h)
-# and add it under GitHub → Settings → Secrets and variables → Actions.
+# under GitHub → Settings → Secrets and variables → Actions.
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
+  check:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
   deploy:
     name: Deploy to Fly
+    needs: check                       # bad code can't reach deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
-    concurrency: deploy-group   # never run two deploys at once
+    concurrency: deploy-group          # never run two deploys at once
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
