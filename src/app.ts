@@ -7,6 +7,7 @@ import { savesRoutes } from "./routes/saves.js";
 import { cardsRoutes } from "./routes/cards.js";
 import { syncRoutes } from "./routes/sync.js";
 import { uploadsRoutes } from "./routes/uploads.js";
+import { previewRoutes } from "./routes/preview.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
@@ -33,6 +34,7 @@ export function buildApp(): FastifyInstance {
   app.register(cardsRoutes);
   app.register(syncRoutes);
   app.register(uploadsRoutes);
+  app.register(previewRoutes);
 
   return app;
 }

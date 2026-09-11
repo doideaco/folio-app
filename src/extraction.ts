@@ -180,6 +180,47 @@ async function fetchMetadata(url: string): Promise<PageMeta> {
   };
 }
 
+/** Lightweight metadata preview for the share sheet (title/image/author). Same
+ *  fetch logic as extractLive, but returns immediately and never persists. */
+export async function previewMetadata(
+  url: string
+): Promise<{ title: string | null; image: string | null; author: string | null }> {
+  const host = (() => { try { return new URL(url).host.toLowerCase(); } catch { return ""; } })();
+
+  // Maps: the place name is in the URL — no fetch needed.
+  if (host.includes("maps.apple.com") || host.includes("maps.google") || host.startsWith("maps.")) {
+    try {
+      const u = new URL(url);
+      return { title: u.searchParams.get("q") || u.searchParams.get("name") || "Place", image: null, author: null };
+    } catch { return { title: null, image: null, author: null }; }
+  }
+
+  const isInstagram = host.includes("instagram");
+  let meta: PageMeta;
+  try {
+    if (isInstagram) {
+      meta = await fetchMetadata(url);
+      if (!meta.image) meta = (await fetchInstagramEmbed(url)) ?? meta;
+    } else {
+      meta = (await fetchOEmbed(url)) ?? (await fetchMetadata(url));
+    }
+  } catch {
+    return { title: null, image: null, author: null };
+  }
+
+  let author: string | null = meta.siteName ?? null;
+  let title = meta.title ?? null;
+  if (isInstagram && title) {
+    const m = title.match(/^@?([\w.]+)\s+on\s+Instagram\s*:\s*([\s\S]*)$/i);
+    if (m) {
+      author = "@" + m[1];
+      const cap = (m[2] ?? "").replace(/^["“]+|["”]+$/g, "").trim();
+      title = cap ? cap.slice(0, 90) : "@" + m[1];
+    }
+  }
+  return { title, image: meta.image ?? null, author };
+}
+
 function stubExtract(type: string, sourceUrl: string | null) {
   switch (type) {
     case "recipe":
