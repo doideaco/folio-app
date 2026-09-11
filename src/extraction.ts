@@ -4,6 +4,7 @@
 
 import { q, one } from "./db.js";
 import { config } from "./config.js";
+import { cacheRemoteImage } from "./storage.js";
 
 const inFlight = new Set<string>();
 const STAGE_DELAY_MS = 1200;
@@ -389,6 +390,10 @@ async function extractLive(cardId: string, card: any): Promise<void> {
   // Keep the user's type guess for filtering; default 'other' to 'link'.
   const type: string = card.type === "other" ? "link" : card.type;
 
+  // Re-host the thumbnail on our bucket so it's stable/fast (falls back to the
+  // origin URL if caching fails or storage isn't configured).
+  const thumb = meta.image ? (await cacheRemoteImage(meta.image)) ?? meta.image : null;
+
   // For place-typed saves, build a place shape (name from the title/caption) so
   // the app can geocode it on-device. Coords are filled in later via PATCH.
   const extracted = type === "place"
@@ -405,7 +410,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
         resolved_url: meta.finalUrl,
         title: meta.title ?? null,
         description: meta.description ?? null,
-        og_image: meta.image ?? null,
+        og_image: thumb,
       };
 
   await q(
@@ -413,7 +418,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
        author_handle=COALESCE(author_handle,$6), extracted=$7::jsonb,
        status='ready', updated_at=now()
      WHERE id = $1`,
-    [cardId, type, title, meta.image ?? null, meta.description ?? null, meta.siteName ?? null, JSON.stringify(extracted)]
+    [cardId, type, title, thumb, meta.description ?? null, meta.siteName ?? null, JSON.stringify(extracted)]
   );
 }
 
