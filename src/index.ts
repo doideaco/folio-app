@@ -1,6 +1,7 @@
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { startExtractionWorker } from "./extraction.js";
+import { startDigestWorker } from "./digest.js";
 import { applySchema } from "./db.js";
 
 const app = buildApp();
@@ -14,9 +15,11 @@ try {
 }
 
 const worker = startExtractionWorker();
+const digestWorker = startDigestWorker();
 
 const shutdown = async () => {
   clearInterval(worker);
+  clearInterval(digestWorker);
   await app.close();
   process.exit(0);
 };

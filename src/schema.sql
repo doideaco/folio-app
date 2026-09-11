@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 );
 CREATE INDEX IF NOT EXISTS device_tokens_user_idx ON device_tokens (user_id);
 
+-- One row per (user, week) once we've sent that user their weekly resurface
+-- digest — claimed before sending so a crash mid-sweep never double-fires.
+CREATE TABLE IF NOT EXISTS push_digests (
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  week    date NOT NULL,
+  sent_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, week)
+);
+
 CREATE TABLE IF NOT EXISTS creator_memory (
   user_id       uuid NOT NULL REFERENCES users(id),
   handle        text NOT NULL,

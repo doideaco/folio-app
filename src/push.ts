@@ -47,6 +47,40 @@ async function sendToToken(deviceToken: string, payload: object): Promise<number
   });
 }
 
+/** Push to all of one user's devices. Returns true if at least one delivered.
+ *  Prunes stale tokens. Best-effort; never throws. */
+export async function notifyUser(
+  userId: string,
+  title: string,
+  body: string,
+  extra: Record<string, string> = {}
+): Promise<boolean> {
+  if (!pushEnabled) return false;
+  try {
+    const rows = await q<{ token: string }>(
+      "SELECT token FROM device_tokens WHERE user_id = $1",
+      [userId]
+    );
+    if (rows.length === 0) return false;
+    const payload = { aps: { alert: { title, body }, sound: "default" }, ...extra };
+    let delivered = false;
+    await Promise.all(
+      rows.map(async ({ token }) => {
+        const status = await sendToToken(token, payload);
+        if (status === 410 || status === 400) {
+          await q("DELETE FROM device_tokens WHERE token = $1", [token]); // stale token
+        } else if (status >= 200 && status < 300) {
+          delivered = true;
+        }
+      })
+    );
+    return delivered;
+  } catch (err) {
+    console.error("[push] notifyUser failed:", (err as Error).message);
+    return false;
+  }
+}
+
 /** Notify every member of a board except the actor. Best-effort; never throws. */
 export async function notifyBoard(
   boardId: string,
