@@ -5,6 +5,7 @@ import { config } from "../config.js";
 import { q, one, tx, serialize } from "../db.js";
 import { requireUserId } from "../auth.js";
 import { forbidden, notFound, badRequest } from "../errors.js";
+import { notifyBoard } from "../push.js";
 
 const createSchema = z.object({
   id: z.string().uuid().optional(), // client-generated id (idempotency key)
@@ -137,6 +138,13 @@ export async function boardsRoutes(app: FastifyInstance) {
     await q(`UPDATE boards SET kind = 'shared', updated_at = now() WHERE id = $1`, [invite.board_id]);
     const board = await one<any>("SELECT * FROM boards WHERE id = $1", [invite.board_id]);
     if (!board) throw notFound();
+    // Tell existing members that someone joined (best-effort).
+    void (async () => {
+      const u = await one<{ handle: string | null }>("SELECT handle FROM users WHERE id = $1", [userId]);
+      await notifyBoard(board.id, userId, board.name, `@${u?.handle ?? "someone"} joined the board`, {
+        board_id: board.id,
+      });
+    })();
     return serialize.board(board);
   });
 

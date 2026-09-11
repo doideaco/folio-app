@@ -76,6 +76,15 @@ CREATE TABLE IF NOT EXISTS card_ratings (
 );
 CREATE INDEX IF NOT EXISTS ratings_card_idx ON card_ratings (card_id);
 
+-- APNs device tokens for push notifications (one row per device token).
+CREATE TABLE IF NOT EXISTS device_tokens (
+  token      text PRIMARY KEY,
+  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform   text NOT NULL DEFAULT 'ios',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS device_tokens_user_idx ON device_tokens (user_id);
+
 CREATE TABLE IF NOT EXISTS creator_memory (
   user_id       uuid NOT NULL REFERENCES users(id),
   handle        text NOT NULL,

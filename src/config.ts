@@ -14,6 +14,12 @@ const schema = z.object({
   APPLE_CLIENT_ID: z.string().default("com.thedoidea.co.Folio"),
   PUBLIC_BASE_URL: z.string().default("http://localhost:3000"),
   EXTRACTION_MODE: z.enum(["stub", "live"]).default("stub"),
+  // APNs (token auth). Push is disabled unless the key trio is set.
+  APNS_KEY_ID: z.string().optional(),
+  APNS_TEAM_ID: z.string().optional(),
+  APNS_KEY: z.string().optional(), // .p8 private key contents (PEM)
+  APNS_BUNDLE_ID: z.string().default("com.thedoidea.co.Folio"),
+  APNS_ENV: z.enum(["sandbox", "production"]).default("production"),
 });
 
 export const config = schema.parse(process.env);

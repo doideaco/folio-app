@@ -5,6 +5,7 @@ import { requireUserId } from "../auth.js";
 import { forbidden, badRequest } from "../errors.js";
 import { isMember } from "./boards.js";
 import { runExtraction } from "../extraction.js";
+import { notifyBoard } from "../push.js";
 
 const schema = z.object({
   id: z.string().uuid().optional(), // client-generated card id (idempotency key)
@@ -72,11 +73,24 @@ export async function savesRoutes(app: FastifyInstance) {
     );
 
     if (!card && id) {
-      // Conflict: the card already exists — return it unchanged.
+      // Conflict: the card already exists — return it unchanged (no re-notify).
       card = await one<any>("SELECT * FROM cards WHERE id = $1", [id]);
       reply.code(200);
       return serialize.card(card);
     }
+
+    // Notify the rest of the board that a card was added (best-effort).
+    void (async () => {
+      const info = await one<{ board: string; handle: string | null }>(
+        "SELECT b.name AS board, u.handle FROM boards b JOIN users u ON u.id = $2 WHERE b.id = $1",
+        [card.board_id, userId]
+      );
+      if (info) {
+        await notifyBoard(card.board_id, userId, info.board, `@${info.handle ?? "someone"} added a save`, {
+          board_id: card.board_id,
+        });
+      }
+    })();
 
     // Image saves are already ready — no extraction to run.
     if (isImage) {
