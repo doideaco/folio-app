@@ -125,6 +125,8 @@ export async function boardsRoutes(app: FastifyInstance) {
       [invite.board_id, userId]
     );
     await q(`UPDATE board_invites SET used_at = now() WHERE token = $1`, [token]);
+    // An accepted invite makes the board shared (also re-stamps it for sync).
+    await q(`UPDATE boards SET kind = 'shared', updated_at = now() WHERE id = $1`, [invite.board_id]);
     const board = await one<any>("SELECT * FROM boards WHERE id = $1", [invite.board_id]);
     if (!board) throw notFound();
     return serialize.board(board);
