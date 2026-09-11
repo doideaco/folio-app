@@ -148,6 +148,16 @@ export async function boardsRoutes(app: FastifyInstance) {
     return serialize.board(board);
   });
 
+  // DELETE /boards/:id — owner deletes a board (cascades cards/members/etc.).
+  app.delete("/boards/:id", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    if (!(await isOwner(userId, id))) throw forbidden("owner only");
+    await q("DELETE FROM boards WHERE id = $1", [id]);
+    reply.code(204);
+    return null;
+  });
+
   // DELETE /boards/:id/invites — owner revokes all outstanding invite links.
   app.delete("/boards/:id/invites", async (req, reply) => {
     const userId = await requireUserId(req);
