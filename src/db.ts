@@ -120,4 +120,10 @@ export const serialize = {
     rating: r.rating,
     updated_at: r.updated_at,
   }),
+  fave: (r: any) => ({
+    id: r.id,
+    card_id: r.card_id,
+    user_id: r.user_id,
+    created_at: r.created_at,
+  }),
 };

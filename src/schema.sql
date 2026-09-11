@@ -76,6 +76,16 @@ CREATE TABLE IF NOT EXISTS card_ratings (
 );
 CREATE INDEX IF NOT EXISTS ratings_card_idx ON card_ratings (card_id);
 
+-- Per-user favourites. One per (card, user).
+CREATE TABLE IF NOT EXISTS card_faves (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  card_id    uuid NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  user_id    uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (card_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS faves_card_idx ON card_faves (card_id);
+
 -- APNs device tokens for push notifications (one row per device token).
 CREATE TABLE IF NOT EXISTS device_tokens (
   token      text PRIMARY KEY,
@@ -152,6 +162,8 @@ BEGIN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   ELSIF v_entity = 'rating' THEN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
+  ELSIF v_entity = 'fave' THEN
+    SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   END IF;
 
   INSERT INTO change_log (entity, entity_id, board_id, op)
@@ -198,3 +210,8 @@ DROP TRIGGER IF EXISTS trg_rating_change ON card_ratings;
 CREATE TRIGGER trg_rating_change
   AFTER INSERT OR UPDATE OR DELETE ON card_ratings
   FOR EACH ROW EXECUTE FUNCTION log_change('rating');
+
+DROP TRIGGER IF EXISTS trg_fave_change ON card_faves;
+CREATE TRIGGER trg_fave_change
+  AFTER INSERT OR UPDATE OR DELETE ON card_faves
+  FOR EACH ROW EXECUTE FUNCTION log_change('fave');

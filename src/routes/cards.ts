@@ -69,6 +69,31 @@ export async function cardsRoutes(app: FastifyInstance) {
     return null;
   });
 
+  // PUT /cards/:id/fave — favourite a card for the caller.
+  app.put("/cards/:id/fave", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const row = await one<any>(
+      `INSERT INTO card_faves (card_id, user_id) VALUES ($1,$2)
+       ON CONFLICT (card_id, user_id) DO UPDATE SET card_id = EXCLUDED.card_id
+       RETURNING *`,
+      [id, userId]
+    );
+    return serialize.fave(row);
+  });
+
+  // DELETE /cards/:id/fave — unfavourite for the caller.
+  app.delete("/cards/:id/fave", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    await one("DELETE FROM card_faves WHERE card_id = $1 AND user_id = $2", [id, userId]);
+    reply.code(204);
+    return null;
+  });
+
   // POST /cards/:id/reextract — re-run extraction (e.g. card came back thin).
   app.post("/cards/:id/reextract", async (req, reply) => {
     const userId = await requireUserId(req);
