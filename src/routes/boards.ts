@@ -4,7 +4,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { q, one, tx, serialize } from "../db.js";
 import { requireUserId } from "../auth.js";
-import { forbidden, notFound } from "../errors.js";
+import { forbidden, notFound, badRequest } from "../errors.js";
 
 const createSchema = z.object({
   id: z.string().uuid().optional(), // client-generated id (idempotency key)
@@ -18,6 +18,14 @@ export async function isMember(userId: string, boardId: string): Promise<boolean
     boardId,
     userId,
   ]);
+  return row != null;
+}
+
+export async function isOwner(userId: string, boardId: string): Promise<boolean> {
+  const row = await one(
+    "SELECT 1 FROM board_members WHERE board_id = $1 AND user_id = $2 AND role = 'owner'",
+    [boardId, userId]
+  );
   return row != null;
 }
 
@@ -130,5 +138,41 @@ export async function boardsRoutes(app: FastifyInstance) {
     const board = await one<any>("SELECT * FROM boards WHERE id = $1", [invite.board_id]);
     if (!board) throw notFound();
     return serialize.board(board);
+  });
+
+  // DELETE /boards/:id/invites — owner revokes all outstanding invite links.
+  app.delete("/boards/:id/invites", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    if (!(await isOwner(userId, id))) throw forbidden("owner only");
+    await q("DELETE FROM board_invites WHERE board_id = $1", [id]);
+    reply.code(204);
+    return null;
+  });
+
+  // DELETE /boards/:id/members/:userId — owner removes a member.
+  app.delete("/boards/:id/members/:userId", async (req, reply) => {
+    const callerId = await requireUserId(req);
+    const { id, userId: target } = req.params as { id: string; userId: string };
+    if (!(await isOwner(callerId, id))) throw forbidden("owner only");
+    if (target === callerId) throw badRequest("owner cannot remove themselves");
+    await q("DELETE FROM board_members WHERE board_id = $1 AND user_id = $2 AND role <> 'owner'", [id, target]);
+    reply.code(204);
+    return null;
+  });
+
+  // POST /boards/:id/leave — the caller leaves a shared board (owners can't).
+  app.post("/boards/:id/leave", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const row = await one<{ role: string }>(
+      "SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2",
+      [id, userId]
+    );
+    if (!row) throw notFound();
+    if (row.role === "owner") throw badRequest("owner cannot leave their own board");
+    await q("DELETE FROM board_members WHERE board_id = $1 AND user_id = $2", [id, userId]);
+    reply.code(204);
+    return null;
   });
 }
