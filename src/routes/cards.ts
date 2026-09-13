@@ -24,6 +24,14 @@ const patchSchema = z.object({
   place_category: z.string().max(40).optional(),
   place_phone: z.string().max(60).optional(),
   place_website: z.string().max(500).optional(),
+  // On-device web enrichment.
+  title: z.string().max(300).optional(),
+  caption: z.string().max(2000).optional(),
+  thumb_url: z.string().max(1000).optional(),
+  link_description: z.string().max(2000).optional(),
+  og_image: z.string().max(1000).optional(),
+  price: z.string().max(40).optional(),
+  brand: z.string().max(120).optional(),
 });
 
 export async function cardsRoutes(app: FastifyInstance) {
@@ -170,6 +178,29 @@ export async function cardsRoutes(app: FastifyInstance) {
         `extracted = coalesce(extracted, jsonb_build_object('kind','place')) || jsonb_build_object(${objArgs})`
       );
     }
+
+    // On-device web enrichment: card columns…
+    if (patch.title !== undefined) push("title", patch.title);
+    if (patch.caption !== undefined) push("caption", patch.caption);
+    if (patch.thumb_url !== undefined) push("thumb_url", patch.thumb_url);
+    // …and link extract detail merged into the extracted JSON.
+    const linkFields: Array<[string, unknown]> = [];
+    if (patch.link_description !== undefined) linkFields.push(["description", patch.link_description]);
+    if (patch.og_image !== undefined) linkFields.push(["og_image", patch.og_image]);
+    if (patch.price !== undefined) linkFields.push(["price", patch.price]);
+    if (patch.brand !== undefined) linkFields.push(["brand", patch.brand]);
+    if (linkFields.length > 0) {
+      const objArgs = linkFields
+        .map(([key, value]) => {
+          vals.push(value);
+          return `'${key}', $${vals.length}::text`;
+        })
+        .join(", ");
+      sets.push(
+        `extracted = coalesce(extracted, jsonb_build_object('kind','link')) || jsonb_build_object(${objArgs})`
+      );
+    }
+
     sets.push("updated_at = now()");
 
     const card = await one<any>(
