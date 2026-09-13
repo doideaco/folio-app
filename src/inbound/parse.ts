@@ -149,7 +149,7 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
         ...BOARD.trips, cardType: "link",
         title: `✈️ ${airline} ${num}`.trim() + (dep && arr ? ` · ${dep}→${arr}` : ""),
         caption: [when, reservation.reservationNumber && `Ref ${reservation.reservationNumber}`].filter(Boolean).join(" · ") || null,
-        extracted: { kind: "link", resolved_url: sourceUrl, kind_detail: "flight", raw: forItem },
+        extracted: { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "flight" },
         sourceUrl, thumb,
       };
     }
@@ -164,7 +164,7 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
         caption: [ci && `In ${ci}`, co && `Out ${co}`].filter(Boolean).join(" · ") || null,
         extracted: addr
           ? { kind: "place", name, address: addr, category: "hotel" }
-          : { kind: "link", resolved_url: sourceUrl, kind_detail: "lodging" },
+          : { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "lodging" },
         sourceUrl, thumb,
       };
     }
@@ -179,7 +179,7 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
         caption: [when, loc?.name].filter(Boolean).join(" · ") || null,
         extracted: addr
           ? { kind: "place", name: loc?.name ?? name, address: addr, category: "venue" }
-          : { kind: "link", resolved_url: sourceUrl, kind_detail: "event" },
+          : { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "event" },
         sourceUrl, thumb,
       };
     }
@@ -191,7 +191,7 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
         ...BOARD.trips, cardType: addr ? "place" : "link",
         title: `🍽️ ${name}`,
         caption: when,
-        extracted: addr ? { kind: "place", name, address: addr, category: "restaurant" } : { kind: "link", resolved_url: sourceUrl },
+        extracted: addr ? { kind: "place", name, address: addr, category: "restaurant" } : { kind: "link", resolved_url: sourceUrl ?? "" },
         sourceUrl, thumb,
       };
     }
@@ -208,7 +208,7 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
       caption: [when, ics.location].filter(Boolean).join(" · ") || null,
       extracted: ics.location
         ? { kind: "place", name: ics.summary, address: ics.location }
-        : { kind: "link", resolved_url: sourceUrl },
+        : { kind: "link", resolved_url: sourceUrl ?? "" },
       sourceUrl, thumb,
     };
   }
@@ -225,7 +225,7 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
     ...board, cardType: "link",
     title: (emojiPrefix + (subject || "Forwarded email")).slice(0, 140),
     caption: snippet,
-    extracted: { kind: "link", resolved_url: sourceUrl, from },
+    extracted: { kind: "link", resolved_url: sourceUrl ?? "", from },
     sourceUrl, thumb,
   };
 }
