@@ -68,6 +68,105 @@ interface PageMeta {
   description?: string;
   image?: string;
   siteName?: string;
+  price?: string;   // e.g. "£24.00" — from JSON-LD product offers
+  brand?: string;   // e.g. "Buster + Punch"
+}
+
+// A realistic desktop Safari UA. Non-hostile sites serve full OpenGraph to this;
+// hostile ones (Etsy/Amazon/IG) block by IP regardless, so on-device fetch is
+// the real answer for those.
+const BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+
+/** Resolve a possibly-relative URL against the page it came from. */
+function absolutize(u: string | undefined, base: string): string | undefined {
+  if (!u) return undefined;
+  try { return new URL(u, base).toString(); } catch { return undefined; }
+}
+
+function firstMatch(html: string, re: RegExp): string | undefined {
+  const m = html.match(re);
+  return m?.[1] ? decodeEntities(m[1]) : undefined;
+}
+
+function formatPrice(amount: string, currency?: string): string {
+  const symbols: Record<string, string> = { GBP: "£", USD: "$", EUR: "€", JPY: "¥" };
+  const sym = currency ? symbols[currency] ?? `${currency} ` : "";
+  return `${sym}${amount}`;
+}
+
+/** Pull structured data from schema.org JSON-LD blocks — the richest signal for
+ *  products (name/image/price/brand), recipes, and articles. Best-effort. */
+function parseJsonLd(html: string, base: string): Partial<PageMeta> {
+  const out: Partial<PageMeta> = {};
+  const blocks = html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  );
+  for (const b of blocks) {
+    let data: any;
+    try { data = JSON.parse((b[1] ?? "").trim()); } catch { continue; }
+    const nodes: any[] = Array.isArray(data) ? data : data?.["@graph"] ? data["@graph"] : [data];
+    for (const node of nodes) {
+      if (!node || typeof node !== "object") continue;
+      if (!out.title && typeof node.name === "string") out.title = node.name.trim();
+      if (!out.description && typeof node.description === "string") out.description = node.description.trim();
+      if (!out.image) {
+        const img = node.image;
+        const url =
+          typeof img === "string" ? img
+          : Array.isArray(img) ? (typeof img[0] === "string" ? img[0] : img[0]?.url)
+          : img?.url;
+        if (typeof url === "string") out.image = absolutize(url, base);
+      }
+      if (!out.brand && node.brand) {
+        out.brand = typeof node.brand === "string" ? node.brand : node.brand?.name;
+      }
+      if (!out.price && node.offers) {
+        const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers;
+        const amount = offer?.price ?? offer?.lowPrice;
+        if (amount != null) out.price = formatPrice(String(amount), offer?.priceCurrency);
+      }
+    }
+  }
+  return out;
+}
+
+/** Combine every metadata signal on a page into one PageMeta: OpenGraph first,
+ *  then Twitter cards, then JSON-LD, then the <title>/description/favicon. */
+function extractPageMeta(html: string, finalUrl: string): PageMeta {
+  const jsonld = parseJsonLd(html, finalUrl);
+  const titleTag = firstMatch(html, /<title[^>]*>([^<]*)<\/title>/i)?.trim();
+  const icon =
+    firstMatch(html, /<link[^>]+rel=["'](?:apple-touch-icon|icon|shortcut icon)["'][^>]+href=["']([^"']+)["']/i) ??
+    firstMatch(html, /<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:apple-touch-icon|icon|shortcut icon)["']/i);
+
+  let host = "";
+  try { host = new URL(finalUrl).host.replace(/^www\./, ""); } catch { /* keep "" */ }
+
+  const image =
+    absolutize(metaContent(html, "og:image"), finalUrl) ??
+    absolutize(metaContent(html, "twitter:image") ?? metaContent(html, "twitter:image:src"), finalUrl) ??
+    jsonld.image ??
+    absolutize(icon, finalUrl);
+
+  return {
+    finalUrl,
+    title:
+      metaContent(html, "og:title") ??
+      metaContent(html, "twitter:title") ??
+      jsonld.title ??
+      titleTag ??
+      (host || undefined),
+    description:
+      metaContent(html, "og:description") ??
+      metaContent(html, "twitter:description") ??
+      jsonld.description ??
+      metaContent(html, "description"),
+    image,
+    siteName: metaContent(html, "og:site_name") ?? (host || undefined),
+    price: jsonld.price,
+    brand: jsonld.brand,
+  };
 }
 
 // Free public oEmbed endpoints (no key) — reliable title + thumbnail for
@@ -164,21 +263,17 @@ async function fetchMetadata(url: string): Promise<PageMeta> {
   const res = await fetch(url, {
     redirect: "follow",
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; FolioBot/1.0; +https://folio.app) Safari/605.1.15",
-      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": BROWSER_UA,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Upgrade-Insecure-Requests": "1",
     },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(9000),
   });
+  // Even on a non-OK response (some sites 403 a bot but still return usable OG
+  // in the body) we parse what we got rather than throwing it away.
   const html = await res.text();
-  const titleTag = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1];
-  return {
-    finalUrl: res.url || url,
-    title: metaContent(html, "og:title") ?? (titleTag ? decodeEntities(titleTag).trim() : undefined),
-    description: metaContent(html, "og:description") ?? metaContent(html, "description"),
-    image: metaContent(html, "og:image"),
-    siteName: metaContent(html, "og:site_name"),
-  };
+  return extractPageMeta(html, res.url || url);
 }
 
 /** Lightweight metadata preview for the share sheet (title/image/author). Same
@@ -394,6 +489,13 @@ async function extractLive(cardId: string, card: any): Promise<void> {
   // origin URL if caching fails or storage isn't configured).
   const thumb = meta.image ? (await cacheRemoteImage(meta.image)) ?? meta.image : null;
 
+  // Fold product signals (brand · price) into the description so shopping saves
+  // carry context even when the page has a thin OG description.
+  const prefix = [meta.brand, meta.price].filter(Boolean).join(" · ");
+  const description = prefix
+    ? meta.description ? `${prefix} — ${meta.description}` : prefix
+    : meta.description ?? null;
+
   // For place-typed saves, build a place shape (name from the title/caption) so
   // the app can geocode it on-device. Coords are filled in later via PATCH.
   const extracted = type === "place"
@@ -409,8 +511,10 @@ async function extractLive(cardId: string, card: any): Promise<void> {
         kind: "link",
         resolved_url: meta.finalUrl,
         title: meta.title ?? null,
-        description: meta.description ?? null,
+        description,
         og_image: thumb,
+        price: meta.price ?? null,
+        brand: meta.brand ?? null,
       };
 
   await q(
@@ -418,7 +522,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
        author_handle=COALESCE(author_handle,$6), extracted=$7::jsonb,
        status='ready', updated_at=now()
      WHERE id = $1`,
-    [cardId, type, title, thumb, meta.description ?? null, meta.siteName ?? null, JSON.stringify(extracted)]
+    [cardId, type, title, thumb, description, meta.siteName ?? null, JSON.stringify(extracted)]
   );
 }
 
