@@ -104,6 +104,14 @@ CREATE TABLE IF NOT EXISTS push_digests (
   PRIMARY KEY (user_id, week)
 );
 
+-- Email-to-Folio: a stable secret forwarding token per user. Mail sent to
+-- <token>@<INBOUND_DOMAIN> creates cards for that user.
+CREATE TABLE IF NOT EXISTS inbound_addresses (
+  token      text PRIMARY KEY,
+  user_id    uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS creator_memory (
   user_id       uuid NOT NULL REFERENCES users(id),
   handle        text NOT NULL,

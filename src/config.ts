@@ -20,6 +20,10 @@ const schema = z.object({
   APNS_KEY: z.string().optional(), // .p8 private key contents (PEM)
   APNS_BUNDLE_ID: z.string().default("com.thedoidea.co.Folio"),
   APNS_ENV: z.enum(["sandbox", "production"]).default("production"),
+  // Email-to-Folio: the domain forwarding addresses live on, and a shared
+  // secret the Cloudflare email Worker presents. Inbound is disabled until set.
+  INBOUND_DOMAIN: z.string().default("in.folio.app"),
+  INBOUND_SECRET: z.string().optional(),
 });
 
 export const config = schema.parse(process.env);

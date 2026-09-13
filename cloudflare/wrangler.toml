@@ -1,0 +1,11 @@
+name = "folio-email"
+main = "email-worker.js"
+compatibility_date = "2024-11-01"
+
+# The Folio backend base URL the Worker forwards parsed emails to.
+[vars]
+FOLIO_BACKEND_URL = "https://folio-doidea.fly.dev"
+
+# FOLIO_INBOUND_SECRET is a secret, set with:
+#   wrangler secret put FOLIO_INBOUND_SECRET
+# (must match the INBOUND_SECRET Fly secret on the backend)

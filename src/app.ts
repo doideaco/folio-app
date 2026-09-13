@@ -10,11 +10,14 @@ import { uploadsRoutes } from "./routes/uploads.js";
 import { previewRoutes } from "./routes/preview.js";
 import { linksRoutes } from "./routes/links.js";
 import { devicesRoutes } from "./routes/devices.js";
+import { inboundRoutes } from "./routes/inbound.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
     // Privacy: log method + url only, never bodies.
     logger: { level: "info", serializers: { req: (r) => ({ method: r.method, url: r.url }) } },
+    // Forwarded emails carry base64 attachments (tickets/PDFs) + HTML bodies.
+    bodyLimit: 20 * 1024 * 1024,
   });
 
   app.setErrorHandler((error, _req, reply) => {
@@ -39,6 +42,7 @@ export function buildApp(): FastifyInstance {
   app.register(previewRoutes);
   app.register(linksRoutes);
   app.register(devicesRoutes);
+  app.register(inboundRoutes);
 
   return app;
 }
