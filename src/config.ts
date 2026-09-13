@@ -22,7 +22,7 @@ const schema = z.object({
   APNS_ENV: z.enum(["sandbox", "production"]).default("production"),
   // Email-to-Folio: the domain forwarding addresses live on, and a shared
   // secret the Cloudflare email Worker presents. Inbound is disabled until set.
-  INBOUND_DOMAIN: z.string().default("in.folio.app"),
+  INBOUND_DOMAIN: z.string().default("folioinbox.me"),
   INBOUND_SECRET: z.string().optional(),
 });
 
