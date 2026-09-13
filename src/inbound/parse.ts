@@ -124,11 +124,75 @@ function parseIcs(atts?: InboundAttachment[]): { summary?: string; start?: strin
   return { summary, start, location };
 }
 
+// ---- forwarded-email handling ------------------------------------------------
+
+/** Strip leading Fwd:/FW:/Re: prefixes (repeatedly). */
+function stripFwd(s: string): string {
+  let out = (s ?? "").trim();
+  while (/^\s*(fwd?|fw|re)\s*:\s*/i.test(out)) out = out.replace(/^\s*(fwd?|fw|re)\s*:\s*/i, "").trim();
+  return out;
+}
+
+/** When a user manually forwards, the envelope From is *them* and the subject is
+ *  "Fwd: …". Recover the original sender + subject from the quoted forwarded
+ *  header block so travel/sender heuristics work against the real source. */
+function unwrapForwarded(email: InboundEmail): { subject: string; from: string; text: string } {
+  const text = (email.text?.trim() || stripHtml(email.html));
+  let subject = stripFwd(email.subject ?? "");
+  let from = (email.from ?? "").toLowerCase();
+  const origFrom =
+    text.match(/\bFrom:\s*[^\n<]*<([^>\s]+@[^>\s]+)>/i)?.[1] ??
+    text.match(/\bFrom:\s*([^\s<]+@[^\s>]+)/i)?.[1];
+  if (origFrom) from = origFrom.toLowerCase();
+  if (!subject) {
+    const origSubject = text.match(/\bSubject:\s*(.+)/i)?.[1]?.trim();
+    if (origSubject) subject = stripFwd(origSubject);
+  }
+  return { subject, from, text };
+}
+
+/** Best-effort check-in/out dates from a booking body (no JSON-LD). */
+function extractStayDates(text: string): string | null {
+  // Grab the rest of the "Check-in …" line (dates come in many formats).
+  const pat = (kind: string) =>
+    text.match(new RegExp(`check[\\s-]?${kind}\\b[^A-Za-z0-9\\n]{0,6}([A-Za-z0-9][^\\n]{2,38})`, "i"))?.[1]
+      ?.replace(/\s+/g, " ").trim();
+  const ci = pat("in");
+  const co = pat("out");
+  const parts = [ci && `In ${ci}`, co && `Out ${co}`].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** Try to pull a property/venue name out of a confirmation subject line. */
+function nameFromSubject(subject: string): string | null {
+  // "Booking confirmed: <Name>" / "Your tickets: <Name>" → text after last colon.
+  if (subject.includes(":")) {
+    const after = subject.split(":").pop()!.trim();
+    if (after.length > 2 && !/^(confirmed|reservation|booking|confirmation)$/i.test(after)) {
+      return after.slice(0, 80);
+    }
+  }
+  // "<Name> - Booking Confirmation"
+  const dash = subject.match(/^(.+?)\s*[-–—]\s*(?:booking|reservation|confirmation|confirmed|tickets?)/i)?.[1]?.trim();
+  return dash && dash.length > 2 ? dash.slice(0, 80) : null;
+}
+
+/** A readable body snippet with forwarded-header noise (From:/Subject:/…) removed. */
+function cleanSnippet(text: string): string | null {
+  const cleaned = text
+    .replace(/-{2,}\s*forwarded message\s*-{2,}/gi, "")
+    .split("\n")
+    .filter((l) => !/^\s*(from|to|date|subject|sent|cc|reply-to|begin forwarded)/i.test(l))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.slice(0, 200) || null;
+}
+
 // ---- main --------------------------------------------------------------------
 
 export function parseInboundEmail(email: InboundEmail): ParsedInbound {
-  const subject = (email.subject ?? "").trim();
-  const from = (email.from ?? "").toLowerCase();
+  const { subject, from, text: bodyText } = unwrapForwarded(email);
   const thumb = firstImageAttachment(email.attachments);
   const sourceUrl = firstUrl(email.text, email.html);
   const nodes = collectJsonLd(email.html);
@@ -213,17 +277,39 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
     };
   }
 
-  // 3) Heuristics on subject + sender.
-  const hay = `${subject} ${from}`.toLowerCase();
-  const isTrip = /(flight|boarding|itinerary|hotel|booking\.com|airbnb|reservation|check-?in|expedia|ryanair|easyjet|british airways|marriott|hilton|train|eurostar|trainline)/.test(hay);
-  const isEvent = /(ticket|concert|gig|tour|festival|ticketmaster|dice\.fm|eventbrite|seatgeek|axs\.com|show)/.test(hay);
-  const board = isEvent ? BOARD.events : isTrip ? BOARD.trips : BOARD.inbox;
-  const emojiPrefix = isEvent ? "🎫 " : isTrip ? "✈️ " : "";
+  // 3) Heuristics on the (un-forwarded) subject + original sender + body text.
+  const hay = `${subject} ${from} ${bodyText.slice(0, 500)}`.toLowerCase();
+  const isLodging = /(hotel|booking\.com|airbnb|hostel|resort|marriott|hilton|premier inn|travelodge|check-?in|check-?out|nights? stay)/.test(hay);
+  const isTrip = isLodging || /(flight|boarding|itinerary|reservation|expedia|ryanair|easyjet|british airways|lufthansa|train|eurostar|trainline|rental car|car hire)/.test(hay);
+  const isEvent = /(ticket|concert|gig|tour|festival|ticketmaster|dice\.fm|eventbrite|seatgeek|axs\.com)/.test(hay);
+  const snippet = cleanSnippet(bodyText);
 
-  const snippet = (email.text?.trim() || stripHtml(email.html)).slice(0, 200) || null;
+  if (isEvent) {
+    const name = nameFromSubject(subject) ?? subject;
+    return {
+      ...BOARD.events, cardType: "link",
+      title: `🎫 ${name || "Event"}`.slice(0, 140),
+      caption: snippet,
+      extracted: { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "event" },
+      sourceUrl, thumb,
+    };
+  }
+
+  if (isTrip) {
+    const dates = extractStayDates(bodyText);
+    const name = nameFromSubject(subject) ?? subject;
+    return {
+      ...BOARD.trips, cardType: "link",
+      title: `${isLodging ? "🏨" : "✈️"} ${name || (isLodging ? "Hotel booking" : "Trip")}`.slice(0, 140),
+      caption: dates ?? snippet,
+      extracted: { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: isLodging ? "lodging" : "trip" },
+      sourceUrl, thumb,
+    };
+  }
+
   return {
-    ...board, cardType: "link",
-    title: (emojiPrefix + (subject || "Forwarded email")).slice(0, 140),
+    ...BOARD.inbox, cardType: "link",
+    title: (subject || "Forwarded email").slice(0, 140),
     caption: snippet,
     extracted: { kind: "link", resolved_url: sourceUrl ?? "", from },
     sourceUrl, thumb,
