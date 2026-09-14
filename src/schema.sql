@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS card_sources (
 );
 CREATE INDEX IF NOT EXISTS card_sources_card_idx ON card_sources (card_id, message_date);
 
+-- Brand logo cache: one row per registrable domain, url re-hosted on our bucket
+-- (empty url marks a domain we tried and couldn't get a logo for).
+CREATE TABLE IF NOT EXISTS brand_logos (
+  domain     text PRIMARY KEY,
+  url        text NOT NULL DEFAULT '',
+  fetched_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS card_comments (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   card_id    uuid NOT NULL REFERENCES cards(id) ON DELETE CASCADE,

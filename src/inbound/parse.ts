@@ -4,6 +4,8 @@
 // attach a .ics calendar. We parse those first (free, no LLM), then fall back to
 // subject/sender heuristics. The board is chosen from the content.
 
+import { brandDomain } from "./brands.js";
+
 export interface InboundAttachment {
   filename?: string;
   mimeType?: string;
@@ -35,6 +37,8 @@ export interface ParsedInbound {
   /** The one actionable date (ISO), stored on the card's `event_at` so it drives
    *  the Agenda + reminders. Mirrors any `date` inside a `.record` extract. */
   eventAt?: string | null;
+  /** Registrable brand domain (for logo lookup), e.g. "booking.com". */
+  providerDomain?: string | null;
 }
 
 const BOARD = {
@@ -63,6 +67,7 @@ function recordCard(opts: {
   provider?: string | null;
   status?: string | null;
   notice?: string | null;
+  brandDomain?: string | null;
   caption?: string | null;
   sourceUrl: string | null;
   thumb: ParsedInbound["thumb"];
@@ -97,6 +102,7 @@ function recordCard(opts: {
     sourceUrl: opts.sourceUrl,
     thumb: opts.thumb,
     eventAt: opts.date ?? null,
+    providerDomain: opts.brandDomain ?? null,
   };
 }
 
@@ -670,6 +676,7 @@ function extractFlight(
     provider: airline.name,
     status: changed ? "Booking updated" : "Confirmed",
     notice: changed ? "This booking was changed — check the latest times and details." : null,
+    brandDomain: brandDomain(airline.name, from),
     sourceUrl, thumb,
   });
 }
@@ -748,6 +755,7 @@ function extractLodging(
     place: location ? { name, address: location, category: "hotel" } : null,
     actionUrl: sourceUrl,
     provider, status: "Confirmed", notice,
+    brandDomain: brandDomain(provider, from),
     sourceUrl, thumb,
   });
 }
@@ -817,6 +825,7 @@ function extractOrder(
     subtitle: product,
     provider: merchant,
     status: shipped ? "Dispatched" : "Order received",
+    brandDomain: brandDomain(merchant, from),
     dateLabel, date: date?.iso ?? null,
     fields, amount, actionUrl: sourceUrl, sourceUrl, thumb,
   });

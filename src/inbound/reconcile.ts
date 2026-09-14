@@ -16,7 +16,7 @@ export interface Source {
 
 const SCALARS = [
   "record_kind", "title", "subtitle", "date_label", "date",
-  "amount", "action_url", "provider", "status", "notice", "place",
+  "amount", "action_url", "provider", "provider_logo", "status", "notice", "place",
 ];
 
 /** Purchases (order + its shipment notices) share one record; other kinds key on

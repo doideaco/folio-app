@@ -8,6 +8,7 @@ import { putObject, storageEnabled } from "../storage.js";
 import { notifyBoard } from "../push.js";
 import { parseInboundEmail, type InboundEmail } from "../inbound/parse.js";
 import { reconcileKey, mergeRecords, diffRecords, type Rec } from "../inbound/reconcile.js";
+import { resolveBrandLogo } from "../inbound/brandLogo.js";
 
 /** Extract the forwarding token from a recipient address: strips a display
  *  name, the domain, and any +tag → the local part before '+'. */
@@ -119,6 +120,13 @@ export async function inboundRoutes(app: FastifyInstance) {
     const messageMs = email.date ? Date.parse(email.date) : NaN;
     const messageDate = Number.isNaN(messageMs) ? new Date() : new Date(messageMs);
     const parsed = parseInboundEmail(email, { now: messageDate });
+
+    // Best-effort brand logo (server-fetched once per domain, re-hosted on our
+    // bucket) so the card can show e.g. the Booking.com / BA mark.
+    if (parsed.providerDomain && (parsed.extracted as Rec).kind === "record") {
+      const logo = await resolveBrandLogo(parsed.providerDomain).catch(() => null);
+      if (logo) (parsed.extracted as Rec).provider_logo = logo;
+    }
 
     // Keep a capped copy of the email so on-device extraction can deep-parse it.
     const rawText = `${email.subject ?? ""}\n\n${email.text ?? ""}`.slice(0, 6000).trim() || null;
