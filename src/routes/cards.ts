@@ -17,7 +17,7 @@ const patchSchema = z.object({
   tried_at: z.string().datetime().nullable().optional(),
   clear_tried: z.boolean().optional(),
   user_note: z.string().nullable().optional(),
-  background: z.string().max(60).nullable().optional(),
+  background: z.string().max(1000).nullable().optional(), // "gradient:x" or "photo:<url>"
   lat: z.number().optional(),
   lng: z.number().optional(),
   place_address: z.string().max(300).optional(),

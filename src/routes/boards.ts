@@ -91,7 +91,7 @@ export async function boardsRoutes(app: FastifyInstance) {
       .object({
         name: z.string().min(1).max(80).optional(),
         emoji: z.string().max(8).nullable().optional(),
-        background: z.string().max(60).nullable().optional(),
+        background: z.string().max(1000).nullable().optional(), // "gradient:x" or "photo:<url>"
       })
       .parse(req.body ?? {});
 
