@@ -133,13 +133,13 @@ export async function inboundRoutes(app: FastifyInstance) {
     const rawText = `${email.subject ?? ""}\n\n${email.text ?? ""}`.slice(0, 6000).trim() || null;
 
     const card = await one<any>(
-      `INSERT INTO cards (board_id, added_by, source_url, type, status, title, thumb_url, caption, extracted, raw_text)
-       VALUES ($1,$2,$3,$4,'ready',$5,$6,$7,$8::jsonb,$9)
+      `INSERT INTO cards (board_id, added_by, source_url, type, status, title, thumb_url, caption, extracted, raw_text, event_at)
+       VALUES ($1,$2,$3,$4,'ready',$5,$6,$7,$8::jsonb,$9,$10)
        RETURNING *`,
       [
         boardId, userId, parsed.sourceUrl, parsed.cardType,
         parsed.title.slice(0, 300), thumbUrl, parsed.caption,
-        JSON.stringify(parsed.extracted), rawText,
+        JSON.stringify(parsed.extracted), rawText, parsed.eventAt ?? null,
       ]
     );
 
