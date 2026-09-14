@@ -32,6 +32,9 @@ const patchSchema = z.object({
   og_image: z.string().max(1000).optional(),
   price: z.string().max(40).optional(),
   brand: z.string().max(120).optional(),
+  // On-device context engine: a normalized structured record + its key date.
+  record: z.record(z.string(), z.any()).optional(),
+  event_at: z.string().datetime().nullable().optional(),
 });
 
 export async function cardsRoutes(app: FastifyInstance) {
@@ -200,6 +203,14 @@ export async function cardsRoutes(app: FastifyInstance) {
         `extracted = coalesce(extracted, jsonb_build_object('kind','link')) || jsonb_build_object(${objArgs})`
       );
     }
+
+    // Replace the extracted payload with a normalized record (inject the
+    // discriminator the client decoder switches on).
+    if (patch.record !== undefined) {
+      vals.push(JSON.stringify(patch.record));
+      sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"record"}'::jsonb`);
+    }
+    if (patch.event_at !== undefined) push("event_at", patch.event_at);
 
     sets.push("updated_at = now()");
 

@@ -51,10 +51,15 @@ CREATE TABLE IF NOT EXISTS cards (
   extracted     jsonb,
   user_note     text,
   tried_at      timestamptz,
+  raw_text      text,          -- capped source text for on-device record extraction
+  event_at      timestamptz,   -- the one actionable date (arrives / due / check-in…)
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS cards_board_idx ON cards (board_id);
+-- Backfill columns on already-deployed databases (CREATE above only covers fresh).
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS raw_text text;
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS event_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS card_comments (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
