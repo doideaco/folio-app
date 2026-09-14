@@ -129,4 +129,12 @@ export const serialize = {
     user_id: r.user_id,
     created_at: r.created_at,
   }),
+  task: (r: any) => ({
+    id: r.id,
+    card_id: r.card_id,
+    text: r.text,
+    done: r.done,
+    position: r.position,
+    created_at: r.created_at,
+  }),
 };

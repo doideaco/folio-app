@@ -46,6 +46,8 @@ export async function syncRoutes(app: FastifyInstance) {
     const ratingDel = new Set<string>();
     const faveUp = new Set<string>();
     const faveDel = new Set<string>();
+    const taskUp = new Set<string>();
+    const taskDel = new Set<string>();
     const memberBoards = new Set<string>();
 
     for (const c of changes) {
@@ -65,6 +67,9 @@ export async function syncRoutes(app: FastifyInstance) {
           break;
         case "fave":
           (del ? faveDel : faveUp).add(c.entity_id);
+          break;
+        case "task":
+          (del ? taskDel : taskUp).add(c.entity_id);
           break;
         case "board_member":
           memberBoards.add(c.entity_id); // entity_id is the board id
@@ -86,6 +91,9 @@ export async function syncRoutes(app: FastifyInstance) {
       : [];
     const faves = faveUp.size
       ? (await q<any>("SELECT * FROM card_faves WHERE id = ANY($1::uuid[])", [[...faveUp]])).map(serialize.fave)
+      : [];
+    const tasks = taskUp.size
+      ? (await q<any>("SELECT * FROM card_tasks WHERE id = ANY($1::uuid[])", [[...taskUp]])).map(serialize.task)
       : [];
     const members = memberBoards.size
       ? (await q<any>("SELECT * FROM board_members WHERE board_id = ANY($1::uuid[])", [[...memberBoards]])).map(serialize.member)
@@ -111,6 +119,7 @@ export async function syncRoutes(app: FastifyInstance) {
       comments,
       ratings,
       faves,
+      tasks,
       members,
       users,
       deleted: {
@@ -118,6 +127,7 @@ export async function syncRoutes(app: FastifyInstance) {
         comments: [...commentDel],
         ratings: [...ratingDel],
         faves: [...faveDel],
+        tasks: [...taskDel],
         boards: [...boardDel],
       },
     };
@@ -133,8 +143,9 @@ function emptyResponse(since: bigint) {
     comments: [],
     ratings: [],
     faves: [],
+    tasks: [],
     members: [],
     users: [],
-    deleted: { cards: [], comments: [], ratings: [], faves: [], boards: [] },
+    deleted: { cards: [], comments: [], ratings: [], faves: [], tasks: [], boards: [] },
   };
 }

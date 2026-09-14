@@ -106,6 +106,60 @@ export async function cardsRoutes(app: FastifyInstance) {
     return null;
   });
 
+  // POST /cards/:id/tasks — add a checklist item.
+  app.post("/cards/:id/tasks", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const body = z.object({
+      id: z.string().uuid().optional(),
+      text: z.string().min(1).max(300),
+      position: z.number().optional(),
+    }).parse(req.body ?? {});
+    const row = await one<any>(
+      `INSERT INTO card_tasks (id, card_id, text, position) VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4)
+       ON CONFLICT (id) DO NOTHING RETURNING *`,
+      [body.id ?? null, id, body.text, body.position ?? 0]
+    );
+    reply.code(201);
+    return serialize.task(row);
+  });
+
+  // PATCH /tasks/:taskId — toggle done / edit text.
+  app.patch("/tasks/:taskId", async (req) => {
+    const userId = await requireUserId(req);
+    const { taskId } = req.params as { taskId: string };
+    const task = await one<any>("SELECT * FROM card_tasks WHERE id = $1", [taskId]);
+    if (!task) throw notFound();
+    const boardId = await cardBoardId(task.card_id);
+    if (!boardId || !(await isMember(userId, boardId))) throw forbidden();
+    const patch = z.object({
+      text: z.string().min(1).max(300).optional(),
+      done: z.boolean().optional(),
+    }).parse(req.body ?? {});
+    const updated = await one<any>(
+      `UPDATE card_tasks SET text = COALESCE($2, text), done = COALESCE($3, done) WHERE id = $1 RETURNING *`,
+      [taskId, patch.text ?? null, patch.done ?? null]
+    );
+    return serialize.task(updated);
+  });
+
+  // DELETE /tasks/:taskId
+  app.delete("/tasks/:taskId", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { taskId } = req.params as { taskId: string };
+    const task = await one<any>("SELECT * FROM card_tasks WHERE id = $1", [taskId]);
+    if (task) {
+      const boardId = await cardBoardId(task.card_id);
+      if (!boardId || !(await isMember(userId, boardId))) throw forbidden();
+      await one("DELETE FROM card_tasks WHERE id = $1", [taskId]);
+    }
+    reply.code(204);
+    return null;
+  });
+
   // POST /cards/:id/reextract — re-run extraction (e.g. card came back thin).
   app.post("/cards/:id/reextract", async (req, reply) => {
     const userId = await requireUserId(req);
