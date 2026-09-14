@@ -235,6 +235,22 @@ test("HTML-only Ryanair email still extracts the flight record", () => {
   assert.ok(r.date?.startsWith("2026-08-03"), `date was ${r.date}`);
 });
 
+// ---- Quote-style forwards ("> " on every line) -----------------------------
+
+test("quote-forwarded Booking.com email still extracts check-in/confirmation", () => {
+  const raw = readFileSync(join(samplesDir, "booking-moxy-dublin.txt"), "utf8");
+  const quoted = raw.split(/\r?\n/).map((l) => `> ${l}`).join("\n");
+  const p = parseInboundEmail(
+    { to: "x@folioinbox.me", from: "Alex <alex@me.com>", subject: "Fwd: 🛄 Thanks! Your booking is confirmed at Moxy Dublin City", text: quoted },
+    { now: new Date("2026-06-29") }
+  );
+  const r = record(p);
+  assert.equal(r.record_kind, "lodging");
+  assert.equal(field(r, "Confirmation"), "5833740861"); // from a quoted body line
+  assert.equal(field(r, "PIN"), "4219");
+  assert.ok(r.date?.startsWith("2026-07-15"), `date was ${r.date}`);
+});
+
 // ---- Real MIME (decoded exactly as postal-mime hands it to the endpoint) ----
 //
 // From a genuine forwarded .eml (base64 multipart/alternative). Crucially the

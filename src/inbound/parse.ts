@@ -422,6 +422,9 @@ function stripForwardHeaders(text: string): string {
   return text
     .replace(/-{2,}\s*forwarded message\s*-{2,}/gi, "")
     .split(/\r?\n/)
+    // Strip quote markers ("> ", ">> ") that quote-style forwards prepend to every
+    // line — otherwise line-anchored label matching (^Check-in, ^Order number) fails.
+    .map((l) => l.replace(/^\s*(?:>\s?)+/, ""))
     // Only strip header lines that carry an inline value (the quoted envelope),
     // so a body field like Ryanair's bare "Date:" (value on the next line) stays.
     .filter((l) => !/^\s*(from|to|cc|bcc|reply-to|sent|subject|date)\s*:\s*\S/i.test(l))
