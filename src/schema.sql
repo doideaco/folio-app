@@ -60,9 +60,26 @@ CREATE INDEX IF NOT EXISTS cards_board_idx ON cards (board_id);
 -- Backfill columns on already-deployed databases (CREATE above only covers fresh).
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS raw_text text;
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS event_at timestamptz;
+-- Reconciliation key (family:reference, e.g. "flight:ZXRQ9T"): later emails about
+-- the same booking update the same card. Null = not reconcilable.
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS ref text;
+CREATE INDEX IF NOT EXISTS cards_owner_ref_idx ON cards (added_by, ref);
 -- Opt-in public read-only page slug for a board (null = private).
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS public_slug text;
 CREATE UNIQUE INDEX IF NOT EXISTS boards_public_slug_idx ON boards (public_slug);
+
+-- Append-only log of the emails that contributed to a reconciled record. The
+-- card's `extracted` is a projection folded from these in message-date order.
+CREATE TABLE IF NOT EXISTS card_sources (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  card_id      uuid NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  message_date timestamptz NOT NULL,
+  subject      text,
+  rec          jsonb NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS card_sources_card_idx ON card_sources (card_id, message_date);
 
 CREATE TABLE IF NOT EXISTS card_comments (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

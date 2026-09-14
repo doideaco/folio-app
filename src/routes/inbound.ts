@@ -7,6 +7,7 @@ import { config } from "../config.js";
 import { putObject, storageEnabled } from "../storage.js";
 import { notifyBoard } from "../push.js";
 import { parseInboundEmail, type InboundEmail } from "../inbound/parse.js";
+import { reconcileKey, mergeRecords, diffRecords, type Rec } from "../inbound/reconcile.js";
 
 /** Extract the forwarding token from a recipient address: strips a display
  *  name, the domain, and any +tag → the local part before '+'. */
@@ -78,6 +79,7 @@ const emailSchema = z.object({
   subject: z.string().optional(),
   html: z.string().optional(),
   text: z.string().optional(),
+  date: z.string().optional(),
   attachments: z.array(attachmentSchema).optional(),
 });
 
@@ -114,7 +116,54 @@ export async function inboundRoutes(app: FastifyInstance) {
     }
     const userId = owner.user_id;
 
-    const parsed = parseInboundEmail(email);
+    const messageMs = email.date ? Date.parse(email.date) : NaN;
+    const messageDate = Number.isNaN(messageMs) ? new Date() : new Date(messageMs);
+    const parsed = parseInboundEmail(email, { now: messageDate });
+
+    // Keep a capped copy of the email so on-device extraction can deep-parse it.
+    const rawText = `${email.subject ?? ""}\n\n${email.text ?? ""}`.slice(0, 6000).trim() || null;
+    const key = (parsed.extracted as Rec).kind === "record" ? reconcileKey(parsed.extracted as Rec) : null;
+
+    // --- Reconciliation: a later email about the same booking updates the same
+    //     card. The card's `extracted` is a projection folded from all its sources.
+    if (key) {
+      const existing = await one<{ id: string; board_id: string }>(
+        "SELECT id, board_id FROM cards WHERE added_by = $1 AND ref = $2 LIMIT 1",
+        [userId, key]
+      );
+      if (existing) {
+        const src = await one<{ id: string }>(
+          `INSERT INTO card_sources (card_id, user_id, message_date, subject, rec)
+           VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING id`,
+          [existing.id, userId, messageDate.toISOString(), email.subject ?? null, JSON.stringify(parsed.extracted)]
+        );
+        const rows = await q<{ id: string; message_date: string; rec: Rec }>(
+          "SELECT id, message_date, rec FROM card_sources WHERE card_id = $1", [existing.id]
+        );
+        const all = rows.map((r) => ({ date: new Date(r.message_date).toISOString(), rec: r.rec }));
+        const before = rows.length > 1
+          ? mergeRecords(rows.filter((r) => r.id !== src!.id).map((r) => ({ date: new Date(r.message_date).toISOString(), rec: r.rec })))
+          : null;
+        const after = mergeRecords(all);
+        after.kind = "record";
+        after.source_count = rows.length;
+        const changes = diffRecords(before, after);
+        if (changes.length) after.changes = changes;
+
+        const updated = await one<any>(
+          `UPDATE cards SET extracted = $1::jsonb, title = $2, event_at = $3, raw_text = $4, updated_at = now()
+           WHERE id = $5 RETURNING *`,
+          [JSON.stringify(after), String(after.title ?? parsed.title).slice(0, 300),
+           (after.date as string) ?? parsed.eventAt ?? null, rawText, existing.id]
+        );
+        const note = changes.length ? `Updated: ${changes[0]}` : `Updated: ${parsed.title.slice(0, 60)}`;
+        void notifyBoard(existing.board_id, userId, parsed.boardName, note, { board_id: existing.board_id });
+        reply.code(200);
+        return { ok: true, card_id: updated.id, board_id: existing.board_id, updated: true };
+      }
+    }
+
+    // --- New card (first email for this booking, or non-reconcilable).
     const boardId = await ensureBoard(userId, parsed.boardName, parsed.boardEmoji);
 
     // Re-host an image attachment as the thumbnail, if we have one.
@@ -129,19 +178,27 @@ export async function inboundRoutes(app: FastifyInstance) {
       } catch { /* thumb is best-effort */ }
     }
 
-    // Keep a capped copy of the email so on-device extraction can deep-parse it.
-    const rawText = `${email.subject ?? ""}\n\n${email.text ?? ""}`.slice(0, 6000).trim() || null;
+    const extracted = parsed.extracted as Rec;
+    if (key) extracted.source_count = 1;
 
     const card = await one<any>(
-      `INSERT INTO cards (board_id, added_by, source_url, type, status, title, thumb_url, caption, extracted, raw_text, event_at)
-       VALUES ($1,$2,$3,$4,'ready',$5,$6,$7,$8::jsonb,$9,$10)
+      `INSERT INTO cards (board_id, added_by, source_url, type, status, title, thumb_url, caption, extracted, raw_text, event_at, ref)
+       VALUES ($1,$2,$3,$4,'ready',$5,$6,$7,$8::jsonb,$9,$10,$11)
        RETURNING *`,
       [
         boardId, userId, parsed.sourceUrl, parsed.cardType,
         parsed.title.slice(0, 300), thumbUrl, parsed.caption,
-        JSON.stringify(parsed.extracted), rawText, parsed.eventAt ?? null,
+        JSON.stringify(extracted), rawText, parsed.eventAt ?? null, key,
       ]
     );
+
+    if (key) {
+      await q(
+        `INSERT INTO card_sources (card_id, user_id, message_date, subject, rec)
+         VALUES ($1,$2,$3,$4,$5::jsonb)`,
+        [card.id, userId, messageDate.toISOString(), email.subject ?? null, JSON.stringify(parsed.extracted)]
+      );
+    }
 
     // Let shared-board members know (best-effort; no-op on solo boards).
     void notifyBoard(boardId, userId, parsed.boardName, `New save: ${parsed.title.slice(0, 80)}`, { board_id: boardId });

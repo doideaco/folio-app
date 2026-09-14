@@ -16,6 +16,9 @@ export interface InboundEmail {
   subject?: string;
   html?: string;
   text?: string;
+  /** Original message date (RFC-2822 or ISO). Used for reconciliation chronology
+   *  and year inference; falls back to now when absent. */
+  date?: string;
   attachments?: InboundAttachment[];
 }
 
