@@ -213,7 +213,11 @@ export function parseInboundEmail(email: InboundEmail): ParsedInbound {
         ...BOARD.trips, cardType: "link",
         title: `✈️ ${airline} ${num}`.trim() + (dep && arr ? ` · ${dep}→${arr}` : ""),
         caption: [when, reservation.reservationNumber && `Ref ${reservation.reservationNumber}`].filter(Boolean).join(" · ") || null,
-        extracted: { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "flight" },
+        extracted: {
+          kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "flight",
+          airline: typeof airline === "string" ? airline : null,
+          flight_number: num || null, origin: dep || null, destination: arr || null,
+        },
         sourceUrl, thumb,
       };
     }
