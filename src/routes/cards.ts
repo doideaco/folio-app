@@ -16,6 +16,7 @@ const patchSchema = z.object({
   type: z.enum(["recipe", "place", "interior", "fit", "link", "other"]).optional(),
   tried_at: z.string().datetime().nullable().optional(),
   clear_tried: z.boolean().optional(),
+  clear_event_at: z.boolean().optional(),
   user_note: z.string().nullable().optional(),
   background: z.string().max(1000).nullable().optional(), // "gradient:x" or "photo:<url>"
   lat: z.number().optional(),
@@ -211,6 +212,7 @@ export async function cardsRoutes(app: FastifyInstance) {
       sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"record"}'::jsonb`);
     }
     if (patch.event_at !== undefined) push("event_at", patch.event_at);
+    else if (patch.clear_event_at) push("event_at", null);
 
     sets.push("updated_at = now()");
 
