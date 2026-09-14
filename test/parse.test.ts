@@ -55,6 +55,9 @@ test("BA changed e-ticket → flight ZXRQ9T", () => {
   assert.match(field(r, "Flight") ?? field(r, "Flights") ?? "", /BA\d{3,4}/);
   assert.ok(r.date?.startsWith("2026-02-21"), `date was ${r.date}`);
   assert.equal(p.eventAt, r.date);
+  assert.equal(r.provider, "British Airways");
+  assert.equal(r.status, "Booking updated"); // subject says "changed"
+  assert.ok(r.notice, "expected a change notice");
 });
 
 test("BA booking confirmation → flight XP3LKK", () => {
@@ -259,7 +262,20 @@ test("real Booking.com .eml (text/plain part) extracts the full lodging record",
   assert.ok(r.date?.startsWith("2026-07-15"), `date was ${r.date}`);
   assert.equal(r.amount, "£391.85");
   assert.equal(field(r, "Price"), "€453.90");
+  assert.equal(r.provider, "Booking.com");
+  assert.equal(r.status, "Confirmed");
   assert.ok(r.place?.address?.includes("Sackville"), `address was ${r.place?.address}`);
+});
+
+test("citizenM notice = city tax due at property", () => {
+  const r = record(parseFixture("booking-citizenm-paris.txt"));
+  assert.match(r.notice ?? "", /16\.90.*property/i);
+});
+
+test("Tradeinn provider + Dispatched status", () => {
+  const r = record(parseFixture("tradeinn-72423796.txt"));
+  assert.equal(r.provider, "Tradeinn");
+  assert.equal(r.status, "Dispatched");
 });
 
 test("real Booking.com .eml (91KB text/html part) also extracts the record", () => {

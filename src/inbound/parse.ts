@@ -57,6 +57,9 @@ function recordCard(opts: {
   place?: { name: string; address?: string | null; category?: string | null } | null;
   amount?: string | null;
   actionUrl?: string | null;
+  provider?: string | null;
+  status?: string | null;
+  notice?: string | null;
   caption?: string | null;
   sourceUrl: string | null;
   thumb: ParsedInbound["thumb"];
@@ -72,6 +75,9 @@ function recordCard(opts: {
   if (opts.fields && opts.fields.length) extracted.fields = opts.fields;
   if (opts.amount) extracted.amount = opts.amount;
   if (opts.actionUrl) extracted.action_url = opts.actionUrl;
+  if (opts.provider) extracted.provider = opts.provider;
+  if (opts.status) extracted.status = opts.status;
+  if (opts.notice) extracted.notice = opts.notice;
   if (opts.place) {
     const p: Record<string, unknown> = { name: opts.place.name };
     if (opts.place.address) p.address = opts.place.address;
@@ -648,12 +654,17 @@ function extractFlight(
   if (route) fields.push({ label: "Route", value: route, copyable: false });
   if (passenger) fields.push({ label: "Passenger", value: passenger, copyable: false });
 
+  const changed = /\b(changed|updated|rebooked|schedule change|amended|new times?)\b/i.test(`${subject} ${body.slice(0, 400)}`);
   const subtitleBits = [route, flights.join(" · ")].filter(Boolean);
   return recordCard({
     board: BOARD.trips, recordKind: "flight", title,
     subtitle: subtitleBits.join(" · ") || null,
     dateLabel: "Departs", date: when?.iso ?? null,
-    fields, amount, actionUrl: sourceUrl, sourceUrl, thumb,
+    fields, amount, actionUrl: sourceUrl,
+    provider: airline.name,
+    status: changed ? "Booking updated" : "Confirmed",
+    notice: changed ? "This booking was changed — check the latest times and details." : null,
+    sourceUrl, thumb,
   });
 }
 
@@ -717,6 +728,11 @@ function extractLodging(
   if (dueAtProperty) fields.push({ label: "Due at property", value: dueAtProperty, copyable: false });
   if (phone) fields.push({ label: "Phone", value: phone, copyable: true });
 
+  const provider = isBooking ? "Booking.com" : isAirbnb ? "Airbnb" : null;
+  const nonRefundable = /non[\s-]?refundable/i.test(body);
+  const notice = dueAtProperty
+    ? `${dueAtProperty} to pay at the property`
+    : (nonRefundable ? "Non-refundable booking." : null);
   return recordCard({
     board: BOARD.trips, recordKind: "lodging",
     title: `🏨 ${name}`.slice(0, 200),
@@ -724,7 +740,9 @@ function extractLodging(
     dateLabel: "Check-in", date: ciWhen?.iso ?? null,
     fields, amount,
     place: location ? { name, address: location, category: "hotel" } : null,
-    actionUrl: sourceUrl, sourceUrl, thumb,
+    actionUrl: sourceUrl,
+    provider, status: "Confirmed", notice,
+    sourceUrl, thumb,
   });
 }
 
@@ -791,6 +809,8 @@ function extractOrder(
   return recordCard({
     board: BOARD.orders, recordKind: kind, title,
     subtitle: product,
+    provider: merchant,
+    status: shipped ? "Dispatched" : "Order received",
     dateLabel, date: date?.iso ?? null,
     fields, amount, actionUrl: sourceUrl, sourceUrl, thumb,
   });
