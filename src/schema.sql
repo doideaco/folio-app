@@ -60,6 +60,9 @@ CREATE INDEX IF NOT EXISTS cards_board_idx ON cards (board_id);
 -- Backfill columns on already-deployed databases (CREATE above only covers fresh).
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS raw_text text;
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS event_at timestamptz;
+-- Opt-in public read-only page slug for a board (null = private).
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS public_slug text;
+CREATE UNIQUE INDEX IF NOT EXISTS boards_public_slug_idx ON boards (public_slug);
 
 CREATE TABLE IF NOT EXISTS card_comments (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

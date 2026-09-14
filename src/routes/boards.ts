@@ -82,6 +82,36 @@ export async function boardsRoutes(app: FastifyInstance) {
     return serialize.board(board);
   });
 
+  // POST /boards/:id/publish — owner opts the board into a public read-only page.
+  app.post("/boards/:id/publish", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    if (!(await isOwner(userId, id))) throw forbidden("owner only");
+    let board = await one<any>("SELECT * FROM boards WHERE id = $1", [id]);
+    if (!board) throw notFound();
+    if (!board.public_slug) {
+      const slug = randomBytes(8).toString("base64url"); // ~11 chars, unguessable
+      board = await one<any>(
+        "UPDATE boards SET public_slug = $2, updated_at = now() WHERE id = $1 RETURNING *",
+        [id, slug]
+      );
+    }
+    return serialize.board(board);
+  });
+
+  // POST /boards/:id/unpublish — take the public page down.
+  app.post("/boards/:id/unpublish", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    if (!(await isOwner(userId, id))) throw forbidden("owner only");
+    const board = await one<any>(
+      "UPDATE boards SET public_slug = NULL, updated_at = now() WHERE id = $1 RETURNING *",
+      [id]
+    );
+    if (!board) throw notFound();
+    return serialize.board(board);
+  });
+
   // PATCH /boards/:id — rename / change emoji.
   app.patch("/boards/:id", async (req) => {
     const userId = await requireUserId(req);

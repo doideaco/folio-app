@@ -77,6 +77,7 @@ export const serialize = {
     cover_card_id: r.cover_card_id,
     kind: r.kind,
     background: r.background ?? null,
+    public_slug: r.public_slug ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   }),
