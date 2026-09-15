@@ -238,6 +238,43 @@ test("HTML-only Ryanair email still extracts the flight record", () => {
   assert.ok(r.date?.startsWith("2026-08-03"), `date was ${r.date}`);
 });
 
+// ---- Events + trains --------------------------------------------------------
+
+test("Ticketmaster concert → event record (HAIM)", () => {
+  const p = parseFixture("ticketmaster-haim.txt");
+  const r = record(p);
+  assert.equal(r.record_kind, "event");
+  assert.equal(p.boardName, "Events");
+  assert.equal(r.provider, "Ticketmaster");
+  assert.match(r.title, /HAIM/);
+  assert.equal(field(r, "Order #"), "8-13232/UK1");
+  assert.ok(r.date?.startsWith("2025-10-28"), `date was ${r.date}`);
+  assert.match(field(r, "Venue") ?? "", /O2/);
+  assert.equal(r.amount, "£282.75");
+});
+
+test("Eurostar → train record (Y6FRGP)", () => {
+  const p = parseFixture("eurostar-y6frgp.txt");
+  const r = record(p);
+  assert.equal(r.record_kind, "trip");
+  assert.equal(p.boardName, "Trips");
+  assert.equal(r.provider, "Eurostar");
+  assert.equal(field(r, "Booking ref"), "Y6FRGP");
+  assert.match(field(r, "Route") ?? "", /Paris.*→.*London/);
+  assert.ok(r.date?.startsWith("2026-07-02"), `date was ${r.date}`);
+  assert.match(field(r, "Seat") ?? "", /Coach 15/);
+});
+
+test("Trainline return trip → train record (Cardiff↔London)", () => {
+  const p = parseFixture("trainline-cardiff.txt");
+  const r = record(p);
+  assert.equal(r.record_kind, "trip");
+  assert.equal(r.provider, "Trainline");
+  assert.match(field(r, "Route") ?? "", /Cardiff.*→.*London/);
+  assert.ok(r.date?.startsWith("2026-06-17"), `date was ${r.date}`);
+  assert.equal(r.amount, "£239.59");
+});
+
 // ---- Quote-style forwards ("> " on every line) -----------------------------
 
 test("quote-forwarded Booking.com email still extracts check-in/confirmation", () => {

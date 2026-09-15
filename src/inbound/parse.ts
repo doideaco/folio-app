@@ -151,6 +151,8 @@ function stripHtml(html?: string): string {
     .replace(/&gt;/gi, ">")
     .replace(/&quot;|&#34;/gi, '"')
     .replace(/&#39;|&apos;|&rsquo;|&lsquo;/gi, "'")
+    .replace(/&pound;|&#163;/gi, "£")
+    .replace(/&euro;|&#8364;/gi, "€")
     .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(+n); } catch { return " "; } })
     .split("\n")
     .map((l) => l.replace(/[ \t ]+/g, " ").trim())
@@ -372,6 +374,8 @@ export function parseInboundEmail(email: InboundEmail, opts?: { now?: Date }): P
   const rec =
     extractFlight(subject, from, cleanText, sourceUrl, thumb, now) ??
     extractLodging(subject, from, cleanText, sourceUrl, thumb, now) ??
+    extractTrain(subject, from, cleanText, sourceUrl, thumb, now) ??
+    extractEvent(subject, from, cleanText, sourceUrl, thumb, now) ??
     extractOrder(subject, from, cleanText, sourceUrl, thumb, now);
   if (rec) return rec;
 
@@ -852,5 +856,126 @@ function extractOrder(
     brandDomain: brandDomain(merchant, from),
     dateLabel, date: date?.iso ?? null,
     fields, amount, actionUrl: sourceUrl, sourceUrl, thumb,
+  });
+}
+
+/** Lines that are never a station name in the route scan. */
+const STATION_STOP = /^(outbound|return|standard|first|advance|anytime|adult|total|plans|special|view|dear|good|what|check|complete|we hope|your|booking|email|get|scan|app|privacy|copyright|mobile|seats|eurostar|trainline|direct|applepay|change|refunds|the .* team)/i;
+
+function extractTrain(
+  subject: string, from: string, body: string, sourceUrl: string | null,
+  thumb: ParsedInbound["thumb"], now: Date
+): ParsedInbound | null {
+  const hay = `${from} ${subject} ${body.slice(0, 500)}`.toLowerCase();
+  const provider = /eurostar/.test(hay) ? "Eurostar" : /trainline|thetrainline/.test(hay) ? "Trainline" : null;
+  if (!provider) return null; // known rail providers only (deterministic); more via fixtures
+  const lines = lineList(body);
+
+  const ref =
+    (valueAfter(lines, /^booking reference\b|^reference\b/i) ?? subject.match(/reference[:\s]+([A-Z0-9]{5,})/i)?.[1] ?? "")
+      .match(/[A-Z0-9]{5,}/i)?.[0] ?? null;
+
+  // Travel date: first parseable date carrying a year (skip booked-on noise).
+  let when: { iso: string; hasTime: boolean } | null = null;
+  for (const l of lines) {
+    if (/booked|purchased|order date/i.test(l)) continue;
+    if (!/\b\d{4}\b/.test(l)) continue;
+    const w = parseWhen(l, now);
+    if (w) { when = w; break; }
+  }
+
+  // Route: subject "trip X to Y", else the first consecutive pair of station lines.
+  let origin: string | null = null, dest: string | null = null;
+  const subj = subject.match(/\b(?:trip|from)\s+([A-Z][A-Za-z'. ]+?)\s+to\s+([A-Z][A-Za-z'. ]+?)(?:\s*[(\-–]|$)/);
+  if (subj) { origin = subj[1]!.trim(); dest = subj[2]!.trim(); }
+  else {
+    const isStation = (l: string) => /^[A-Z][A-Za-z'. ]{2,28}$/.test(l) && !STATION_STOP.test(l);
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (isStation(lines[i]!) && isStation(lines[i + 1]!)) { origin = lines[i]!; dest = lines[i + 1]!; break; }
+    }
+  }
+  const route = origin && dest ? `${origin} → ${dest}` : null;
+
+  const departTime = body.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/)?.[0] ?? null;
+  const klass = /1st class|first class/i.test(body) ? "1st Class" : /standard class/i.test(body) ? "Standard" : null;
+  const seat = body.match(/Coach\s*\d+\s*[-–]\s*Seat\s*\d+/i)?.[0] ?? null;
+  const amount =
+    moneyNear(lines, /^total (amount|paid|price)\b|^total\b/i) ??
+    money(body.match(/total[^0-9£€$]{0,12}([£€$]\s?\d[\d,.]*)/i)?.[1] ?? null);
+
+  const fields: Field[] = [];
+  if (ref) fields.push({ label: "Booking ref", value: ref, copyable: true });
+  if (route) fields.push({ label: "Route", value: route, copyable: false });
+  if (departTime) fields.push({ label: "Departs", value: departTime, copyable: false });
+  if (klass) fields.push({ label: "Class", value: klass, copyable: false });
+  if (seat) fields.push({ label: "Seat", value: seat, copyable: false });
+
+  return recordCard({
+    board: BOARD.trips, recordKind: "trip",
+    title: `🚆 ${route ?? provider}`.slice(0, 200),
+    subtitle: [provider, klass].filter(Boolean).join(" · ") || null,
+    dateLabel: "Departs", date: when?.iso ?? null,
+    fields, amount, provider, status: "Confirmed",
+    place: dest ? { name: dest, address: dest, category: "station" } : null,
+    brandDomain: brandDomain(provider, from),
+    actionUrl: sourceUrl, sourceUrl, thumb,
+  });
+}
+
+function extractEvent(
+  subject: string, from: string, body: string, sourceUrl: string | null,
+  thumb: ParsedInbound["thumb"], now: Date
+): ParsedInbound | null {
+  const hay = `${from} ${subject} ${body.slice(0, 600)}`.toLowerCase();
+  const ticketing = /ticketmaster|dice\.fm|eventbrite|seatgeek|\baxs\b|see tickets|gigsandtours|live nation/.test(hay);
+  const eventy = /\bticket(s)?\b|\bconcert\b|\bgig\b|\btour\b|\bfestival\b|\bdoors\b/.test(hay);
+  if (!ticketing && !eventy) return null;
+  const lines = lineList(body);
+
+  let name = subject.match(/\byour\s+(.+?)\s+ticket/i)?.[1]?.trim() ?? nameFromSubject(subject) ?? subject;
+  name = name.replace(/^your\s+/i, "").replace(/\s+ticket(s)?( confirmation)?$/i, "").trim();
+
+  // Event date: the first line that parses AND carries a time (shows have showtimes).
+  let when: { iso: string; hasTime: boolean } | null = null, whenIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const w = parseWhen(lines[i]!, now);
+    if (w?.hasTime) { when = w; whenIdx = i; break; }
+  }
+  if (!when) for (let i = 0; i < lines.length; i++) { const w = parseWhen(lines[i]!, now); if (w) { when = w; whenIdx = i; break; } }
+
+  // Venue: the line just before the date (Ticketmaster stacks name/venue/date).
+  let venue: string | null = null;
+  for (let j = whenIdx - 1; j >= 0 && j >= whenIdx - 3; j--) {
+    const l = lines[j]!;
+    if (l && !/^https?:/i.test(l) && !/order\s*#/i.test(l) && l.toLowerCase() !== name.toLowerCase() && !/^\d/.test(l)) { venue = l; break; }
+  }
+
+  const order = body.match(/order\s*#?\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,})/i)?.[1] ?? null;
+  const section = valueAfter(lines, /^section\b/i)?.match(/\w+/)?.[0] ?? null;
+  const row = valueAfter(lines, /^row\b/i)?.match(/\w+/)?.[0] ?? null;
+  const seat = valueAfter(lines, /^seat\b/i)?.match(/\w+/)?.[0] ?? null;
+  const amount =
+    moneyNear(lines, /^total\b/i) ??
+    money(body.match(/total[^0-9£€$]{0,12}([£€$]\s?\d[\d,.]*)/i)?.[1] ?? null);
+
+  const provider = /ticketmaster/i.test(hay) ? "Ticketmaster" : /dice/i.test(hay) ? "DICE"
+    : /eventbrite/i.test(hay) ? "Eventbrite" : /seatgeek/i.test(hay) ? "SeatGeek"
+    : /\baxs\b/i.test(hay) ? "AXS" : merchantName(from, subject);
+
+  const fields: Field[] = [];
+  if (order) fields.push({ label: "Order #", value: order, copyable: true });
+  const seatBits = [section && `Sec ${section}`, row && `Row ${row}`, seat && `Seat ${seat}`].filter(Boolean).join(" · ");
+  if (seatBits) fields.push({ label: "Seat", value: seatBits, copyable: false });
+  if (venue) fields.push({ label: "Venue", value: venue, copyable: false });
+
+  return recordCard({
+    board: BOARD.events, recordKind: "event",
+    title: `🎫 ${name}`.slice(0, 140),
+    subtitle: venue,
+    dateLabel: "Starts", date: when?.iso ?? null,
+    fields, amount, provider, status: "Booked",
+    place: venue ? { name: venue, address: venue, category: "venue" } : null,
+    brandDomain: brandDomain(provider, from),
+    actionUrl: sourceUrl, sourceUrl, thumb,
   });
 }
