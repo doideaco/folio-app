@@ -382,27 +382,49 @@ export function parseInboundEmail(email: InboundEmail, opts?: { now?: Date }): P
   const isEvent = /(ticket|concert|gig|tour|festival|ticketmaster|dice\.fm|eventbrite|seatgeek|axs\.com)/.test(hay);
   const snippet = cleanSnippet(bodyText);
 
+  // Shared best-effort fields for the generic event/trip records below. Dates are
+  // taken only from a clearly-labelled line (never a blind scan) so we don't
+  // surface a wrong date; precise per-provider extraction comes with fixtures.
+  const genLines = lineList(stripForwardHeaders(bodyText));
+  const genRef = valueAfter(genLines, /order\s*(number|no\.?|#|confirmation)|ticket\s*(number|no\.?|#)|booking\s*(reference|ref)/i)
+      ?.match(/[A-Z0-9]{5,}/i)?.[0]
+    ?? subject.match(/\b(?:order|booking|ref(?:erence)?)\s+([A-Z0-9]{5,})/i)?.[1]
+    ?? null;
+  const genWhen = parseWhen(valueAfter(genLines, /event date|^date\b|^when\b|departure|^depart/i), now);
+
   if (isEvent) {
     const name = nameFromSubject(subject) ?? subject;
-    return {
-      ...BOARD.events, cardType: "link",
+    const provider = merchantName(from, subject);
+    const venue = valueAfter(genLines, /^(venue|location|where)\b/i);
+    const fields: Field[] = [];
+    if (genRef) fields.push({ label: "Order #", value: genRef, copyable: true });
+    if (venue) fields.push({ label: "Venue", value: venue.slice(0, 80), copyable: false });
+    return recordCard({
+      board: BOARD.events, recordKind: "event",
       title: `🎫 ${name || "Event"}`.slice(0, 140),
-      caption: snippet,
-      extracted: { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: "event" },
-      sourceUrl, thumb,
-    };
+      subtitle: venue ?? snippet,
+      dateLabel: genWhen ? "Starts" : null, date: genWhen?.iso ?? null,
+      fields, provider, status: "Booked",
+      brandDomain: brandDomain(provider, from),
+      actionUrl: sourceUrl, sourceUrl, thumb,
+    });
   }
 
   if (isTrip) {
-    const dates = extractStayDates(bodyText);
     const name = nameFromSubject(subject) ?? subject;
-    return {
-      ...BOARD.trips, cardType: "link",
-      title: `${isLodging ? "🏨" : "✈️"} ${name || (isLodging ? "Hotel booking" : "Trip")}`.slice(0, 140),
-      caption: dates ?? snippet,
-      extracted: { kind: "link", resolved_url: sourceUrl ?? "", kind_detail: isLodging ? "lodging" : "trip" },
-      sourceUrl, thumb,
-    };
+    const isTrain = /\b(train|eurostar|trainline|rail|lner|avanti|gwr)\b/i.test(hay);
+    const provider = merchantName(from, subject);
+    const fields: Field[] = [];
+    if (genRef) fields.push({ label: "Booking ref", value: genRef, copyable: true });
+    return recordCard({
+      board: BOARD.trips, recordKind: isTrain ? "trip" : "trip",
+      title: `${isLodging ? "🏨" : isTrain ? "🚆" : "✈️"} ${name || (isLodging ? "Hotel booking" : "Trip")}`.slice(0, 140),
+      subtitle: extractStayDates(bodyText) ?? snippet,
+      dateLabel: genWhen ? "Departs" : null, date: genWhen?.iso ?? null,
+      fields, provider, status: "Booked",
+      brandDomain: brandDomain(provider, from),
+      actionUrl: sourceUrl, sourceUrl, thumb,
+    });
   }
 
   return {
