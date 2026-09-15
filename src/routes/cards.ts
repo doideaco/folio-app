@@ -35,6 +35,8 @@ const patchSchema = z.object({
   brand: z.string().max(120).optional(),
   // On-device context engine: a normalized structured record + its key date.
   record: z.record(z.string(), z.any()).optional(),
+  // On-device recipe extraction (freeform captions → structured recipe).
+  recipe: z.record(z.string(), z.any()).optional(),
   event_at: z.string().datetime().nullable().optional(),
 });
 
@@ -272,6 +274,11 @@ export async function cardsRoutes(app: FastifyInstance) {
     if (patch.record !== undefined) {
       vals.push(JSON.stringify(patch.record));
       sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"record"}'::jsonb`);
+    }
+    // Replace the extracted payload with a structured recipe (on-device).
+    if (patch.recipe !== undefined) {
+      vals.push(JSON.stringify(patch.recipe));
+      sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"recipe"}'::jsonb`);
     }
     if (patch.event_at !== undefined) push("event_at", patch.event_at);
     else if (patch.clear_event_at) push("event_at", null);
