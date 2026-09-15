@@ -20,7 +20,7 @@ const MIN_OK = 64;   // below this a logo looks blurry — prefer the crisp kind
 const GREAT = 176;   // stop early once we find something this sharp
 
 /** Width/height from a PNG or JPEG header — no image dependency. */
-function imageSize(buf: Buffer): { w: number; h: number } | null {
+export function imageSize(buf: Buffer): { w: number; h: number } | null {
   if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50) { // PNG IHDR
     return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
   }

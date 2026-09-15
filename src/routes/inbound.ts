@@ -8,7 +8,7 @@ import { putObject, storageEnabled } from "../storage.js";
 import { notifyBoard } from "../push.js";
 import { parseInboundEmail, type InboundEmail } from "../inbound/parse.js";
 import { reconcileKey, mergeRecords, diffRecords, type Rec } from "../inbound/reconcile.js";
-import { resolveBrandLogo } from "../inbound/brandLogo.js";
+import { resolveBrandLogo, imageSize } from "../inbound/brandLogo.js";
 
 /** Extract the forwarding token from a recipient address: strips a display
  *  name, the domain, and any +tag → the local part before '+'. */
@@ -179,7 +179,11 @@ export async function inboundRoutes(app: FastifyInstance) {
     if (parsed.thumb && storageEnabled) {
       try {
         const buf = Buffer.from(parsed.thumb.base64, "base64");
-        if (buf.length > 0 && buf.length < 12 * 1024 * 1024) {
+        // Skip logos/tracking pixels — only re-host a genuine content image
+        // (≥128px on the short edge). Avoids junk thumbnails + wasted storage.
+        const size = imageSize(buf);
+        const bigEnough = size ? Math.min(size.w, size.h) >= 128 : buf.length >= 20_000;
+        if (buf.length > 0 && buf.length < 12 * 1024 * 1024 && bigEnough) {
           const ext = parsed.thumb.mimeType.includes("png") ? "png" : "jpg";
           thumbUrl = await putObject(`inbound/${randomUUID()}.${ext}`, buf, parsed.thumb.mimeType);
         }
