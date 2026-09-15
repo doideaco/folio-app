@@ -628,12 +628,14 @@ function extractFlight(
     return w.length >= 2 && w.length <= 22 && /^[A-Z]/.test(w) && !STOP.test(w) && w.split(/\s+/).length <= 3;
   };
   let route: string | null = null;
-  const toPair = hay.match(/\b([A-Z][A-Za-z]+(?:\s[A-Z][A-Za-z]+){0,2})\s+to\s+([A-Z][A-Za-z]+(?:\s[A-Z][A-Za-z]+){0,2})\b/);
-  const dash = hay.match(/\b([A-Z][A-Za-z]+)\s+-\s+([A-Z][A-Za-z]+)\b/);
+  // Multi-word both sides so "London - San Francisco" doesn't truncate to "San".
+  const place = String.raw`[A-Z][A-Za-z]+(?:\s[A-Z][A-Za-z]+){0,2}`;
+  const toPair = hay.match(new RegExp(String.raw`\b(${place})\s+to\s+(${place})\b`));
+  const dash = hay.match(new RegExp(String.raw`\b(${place})\s+[-–]\s+(${place})\b`));
   if (toPair && validPlace(toPair[1]) && validPlace(toPair[2])) route = `${toPair[1]!.trim()} → ${toPair[2]!.trim()}`;
-  else if (dash && validPlace(dash[1]) && validPlace(dash[2])) route = `${dash[1]} → ${dash[2]}`;
+  else if (dash && validPlace(dash[1]) && validPlace(dash[2])) route = `${dash[1]!.trim()} → ${dash[2]!.trim()}`;
 
-  const destRaw = subject.match(/\b(?:fly|flight|trip)\s+to\s+([A-Z][A-Za-z]+)/i)?.[1]
+  const destRaw = subject.match(new RegExp(String.raw`\b(?:fly|flight|trip)\s+to\s+(${place})`, "i"))?.[1]
     ?? valueAfter(lines, /^destination/i)?.replace(/[:：]/g, "").trim()
     ?? (route ? route.split("→")[1]?.trim() : null);
   const dest = validPlace(destRaw ?? undefined) ? destRaw : null;

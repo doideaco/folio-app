@@ -168,6 +168,14 @@ export async function cardsRoutes(app: FastifyInstance) {
     if (!boardId) throw notFound();
     if (!(await isMember(userId, boardId))) throw forbidden();
 
+    // Email-derived records have no web page to re-fetch — re-extraction would
+    // replace their rich record with a thin stub. Leave them untouched.
+    const existing = await one<any>("SELECT * FROM cards WHERE id = $1", [id]);
+    if (!existing?.source_url) {
+      reply.code(200);
+      return serialize.card(existing);
+    }
+
     await one(
       `INSERT INTO card_extraction_state (card_id, attempts, next_stage, next_retry_at, last_error)
        VALUES ($1, 0, 'fetch', now(), NULL)

@@ -373,6 +373,13 @@ export async function runExtraction(cardId: string): Promise<void> {
     const card = await one<any>("SELECT * FROM cards WHERE id = $1", [cardId]);
     if (!card) return;
 
+    // Never overwrite a rich email-derived record with a web/stub extract — there
+    // is no page to fetch, and the stub would wipe the record + brand logo.
+    if (!card.source_url || card.extracted?.kind === "record") {
+      await q(`UPDATE cards SET status='ready', updated_at=now() WHERE id = $1`, [cardId]);
+      return;
+    }
+
     if (config.EXTRACTION_MODE === "live" && card.source_url) {
       await extractLive(cardId, card);
     } else {

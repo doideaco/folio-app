@@ -66,6 +66,9 @@ test("BA booking confirmation → flight XP3LKK", () => {
   assert.equal(r.record_kind, "flight");
   assert.equal(field(r, "Booking ref"), "XP3LKK");
   assert.ok(r.date?.startsWith("2025-12-13"), `date was ${r.date}`);
+  // Multi-word destination must not truncate ("San Francisco", never "San").
+  assert.match(r.title, /San Francisco/);
+  assert.doesNotMatch(r.title, /to San$/);
 });
 
 test("Ryanair itinerary → flight Y1H4RC", () => {
