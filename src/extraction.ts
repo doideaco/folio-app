@@ -90,6 +90,16 @@ function firstMatch(html: string, re: RegExp): string | undefined {
   return m?.[1] ? decodeEntities(m[1]) : undefined;
 }
 
+/** A short bold headline from a long social caption: the first sentence/line,
+ *  capped — so the card shows a clean title instead of a wall of bold text. */
+function headline(text: string, max = 70): string {
+  let s = (text.replace(/\r/g, "").split(/\n/)[0] ?? text).trim();
+  const sentence = s.match(/^[\s\S]*?[.!?？！]/);
+  if (sentence && sentence[0].trim().length >= 12) s = sentence[0].trim();
+  if (s.length > max) s = s.slice(0, max).replace(/\s+\S*$/, "").trim() + "…";
+  return s.replace(/^["“”]+|["“”]+$/g, "").trim();
+}
+
 function formatPrice(amount: string, currency?: string): string {
   const symbols: Record<string, string> = { GBP: "£", USD: "$", EUR: "€", JPY: "¥" };
   const sym = currency ? symbols[currency] ?? `${currency} ` : "";
@@ -516,6 +526,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
 
   let finalType = type;
   let finalTitle = title;
+  let finalDescription = description;
   let extracted: Record<string, unknown>;
   if (parsedRecipe) {
     finalType = "recipe";
@@ -539,11 +550,17 @@ async function extractLive(cardId: string, card: any): Promise<void> {
       category: card.extracted?.category ?? null,
     };
   } else {
+    // Social captions (TikTok/IG) arrive as a long title → show a clean bold
+    // headline and move the full caption into the body, not the title.
+    if ((meta.title?.length ?? 0) > 80) {
+      finalTitle = headline(meta.title!);
+      finalDescription = [meta.title, description].filter(Boolean).join("\n\n");
+    }
     extracted = {
       kind: "link",
       resolved_url: meta.finalUrl,
-      title: meta.title ?? null,
-      description,
+      title: finalTitle,
+      description: finalDescription,
       og_image: thumb,
       price: meta.price ?? null,
       brand: meta.brand ?? null,
@@ -555,7 +572,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
        author_handle=COALESCE(author_handle,$6), extracted=$7::jsonb,
        status='ready', updated_at=now()
      WHERE id = $1`,
-    [cardId, finalType, finalTitle, thumb, description, meta.siteName ?? null, JSON.stringify(extracted)]
+    [cardId, finalType, finalTitle, thumb, finalDescription, meta.siteName ?? null, JSON.stringify(extracted)]
   );
 }
 
