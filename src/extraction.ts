@@ -5,6 +5,7 @@
 import { q, one } from "./db.js";
 import { config } from "./config.js";
 import { cacheRemoteImage } from "./storage.js";
+import { parseRecipe, looksLikeRecipe } from "./recipe.js";
 
 const inFlight = new Set<string>();
 const STAGE_DELAY_MS = 1200;
@@ -503,33 +504,56 @@ async function extractLive(cardId: string, card: any): Promise<void> {
     ? meta.description ? `${prefix} — ${meta.description}` : prefix
     : meta.description ?? null;
 
-  // For place-typed saves, build a place shape (name from the title/caption) so
-  // the app can geocode it on-device. Coords are filled in later via PATCH.
-  const extracted = type === "place"
-    ? {
-        kind: "place",
-        name: meta.title ?? host ?? "Place",
-        address: null,
-        lat: null,
-        lng: null,
-        category: card.extracted?.category ?? null,
-      }
-    : {
-        kind: "link",
-        resolved_url: meta.finalUrl,
-        title: meta.title ?? null,
-        description,
-        og_image: thumb,
-        price: meta.price ?? null,
-        brand: meta.brand ?? null,
-      };
+  // Recipe: social recipe posts list ingredients + method in the caption. When
+  // it looks like a recipe (or the type guess said so), parse it into a structured
+  // recipe so the app renders the real recipe card. Only takes effect when parsing
+  // is confident (≥3 ingredients); otherwise we fall through to the link shape.
+  const recipeCaption = meta.description ?? card.caption ?? null;
+  const parsedRecipe =
+    type !== "place" && (card.type === "recipe" || looksLikeRecipe(recipeCaption))
+      ? parseRecipe(recipeCaption)
+      : null;
+
+  let finalType = type;
+  let extracted: Record<string, unknown>;
+  if (parsedRecipe) {
+    finalType = "recipe";
+    extracted = {
+      kind: "recipe",
+      ingredients: parsedRecipe.ingredients,
+      steps: parsedRecipe.steps,
+      serves: null,
+      time_minutes: null,
+    };
+  } else if (type === "place") {
+    // For place-typed saves, build a place shape (name from the title/caption) so
+    // the app can geocode it on-device. Coords are filled in later via PATCH.
+    extracted = {
+      kind: "place",
+      name: meta.title ?? host ?? "Place",
+      address: null,
+      lat: null,
+      lng: null,
+      category: card.extracted?.category ?? null,
+    };
+  } else {
+    extracted = {
+      kind: "link",
+      resolved_url: meta.finalUrl,
+      title: meta.title ?? null,
+      description,
+      og_image: thumb,
+      price: meta.price ?? null,
+      brand: meta.brand ?? null,
+    };
+  }
 
   await q(
     `UPDATE cards SET type=$2, title=$3, thumb_url=$4, caption=COALESCE(caption,$5),
        author_handle=COALESCE(author_handle,$6), extracted=$7::jsonb,
        status='ready', updated_at=now()
      WHERE id = $1`,
-    [cardId, type, title, thumb, description, meta.siteName ?? null, JSON.stringify(extracted)]
+    [cardId, finalType, title, thumb, description, meta.siteName ?? null, JSON.stringify(extracted)]
   );
 }
 
