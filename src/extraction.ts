@@ -5,7 +5,7 @@
 import { q, one } from "./db.js";
 import { config } from "./config.js";
 import { cacheRemoteImage } from "./storage.js";
-import { parseRecipe, looksLikeRecipe } from "./recipe.js";
+import { parseRecipe, looksLikeRecipe, recipeTitle } from "./recipe.js";
 
 const inFlight = new Set<string>();
 const STAGE_DELAY_MS = 1200;
@@ -515,9 +515,11 @@ async function extractLive(cardId: string, card: any): Promise<void> {
       : null;
 
   let finalType = type;
+  let finalTitle = title;
   let extracted: Record<string, unknown>;
   if (parsedRecipe) {
     finalType = "recipe";
+    finalTitle = recipeTitle(recipeCaption, title);
     extracted = {
       kind: "recipe",
       ingredients: parsedRecipe.ingredients,
@@ -553,7 +555,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
        author_handle=COALESCE(author_handle,$6), extracted=$7::jsonb,
        status='ready', updated_at=now()
      WHERE id = $1`,
-    [cardId, finalType, title, thumb, description, meta.siteName ?? null, JSON.stringify(extracted)]
+    [cardId, finalType, finalTitle, thumb, description, meta.siteName ?? null, JSON.stringify(extracted)]
   );
 }
 

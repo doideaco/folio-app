@@ -26,6 +26,35 @@ export interface ParsedRecipe {
   steps: string[];
 }
 
+/**
+ * Derive a clean dish title from a recipe caption, so the card shows
+ * "Smashed Beef Kabob…" instead of the whole caption wall. Falls back to the
+ * provided default when it can't find something sensible.
+ */
+export function recipeTitle(caption: string | null | undefined, fallback: string): string {
+  if (!caption) return fallback;
+  let s = caption.replace(/\r/g, "");
+  // Drop the Instagram "N likes, M comments - user on date:" prefix (up to first colon).
+  s = s.replace(/^\s*\d[\d,.\sKMB]*likes?[\s\S]*?:\s*/i, "");
+  // Drop a leading quote and "@handle on Instagram:" style prefixes.
+  s = s.replace(/^["“”']+/, "").replace(/^@?[\w.]+\s+on\s+\w+\s*:\s*/i, "");
+  // Everything before the first ingredient bullet is the blurb/title area.
+  s = s.split(/\n\s*[-•]\s|\s[-•]\s/)[0] ?? s;
+  // Prefer the text after a "|" divider (creators put the dish name there).
+  if (s.includes("|")) s = s.split("|").pop() ?? s;
+  // Cut at marketing phrases.
+  s = s.split(/\b(?:check my bio|full (?:written )?recipe|link in bio|recipe below|save this|comment)\b/i)[0] ?? s;
+  // If there are multiple sentences, the dish name is usually the last one.
+  const sentences = s.split(/(?<=[.!])\s+/).map((x) => x.trim()).filter(Boolean);
+  if (sentences.length > 1) s = sentences[sentences.length - 1]!;
+  // Drop a leading "Ep 20:" / "Recipe:" label.
+  s = s.replace(/^[^:]{0,24}:\s*/, (m) => (/\d|recipe|ep\b/i.test(m) ? "" : m));
+  // Drop trailing @mentions and tidy punctuation.
+  s = s.replace(/(?:\s+@[\w.]+)+\s*$/, "").replace(/["“”'|:–-]\s*$/, "").trim();
+  if (s.length > 70) s = s.slice(0, 70).replace(/\s+\S*$/, "").trim();
+  return s.length >= 3 ? s : fallback;
+}
+
 /** Does the text carry enough recipe signal to bother parsing? */
 export function looksLikeRecipe(text: string | null | undefined): boolean {
   if (!text) return false;
