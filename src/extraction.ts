@@ -372,6 +372,178 @@ export async function refetchProduct(
   } catch { return null; }
 }
 
+// --- Music (Apple Music / Spotify / YouTube Music / SoundCloud / Tidal) -------
+//
+// A saved music link becomes a normalized `.music` card that can be previewed and
+// opened in whichever service the person uses. The old Odesli/song.link public
+// API is deprecated (401 PUBLIC_API_ACCESS_DEPRECATED), so we go iTunes-first:
+// Apple Music URLs resolve exactly by catalog id; other services resolve via an
+// iTunes catalog search on "artist title" (which gives us a 30s preview, artwork,
+// and the canonical Apple Music link, no key). We keep the source service's exact
+// link; the app synthesises search links for the rest.
+
+const MUSIC_HOSTS = /(?:^|\.)(?:music\.apple\.com|open\.spotify\.com|spotify\.com|music\.youtube\.com|soundcloud\.com|tidal\.com|deezer\.com)$/i;
+function isMusicHost(u: string): boolean {
+  try { return MUSIC_HOSTS.test(new URL(u).host.toLowerCase()); } catch { return false; }
+}
+function musicPlatform(host: string): string {
+  if (host.includes("music.apple")) return "appleMusic";
+  if (host.includes("spotify")) return "spotify";
+  if (host.includes("music.youtube")) return "youtubeMusic";
+  if (host.includes("youtube") || host.includes("youtu.be")) return "youtube";
+  if (host.includes("soundcloud")) return "soundcloud";
+  if (host.includes("tidal")) return "tidal";
+  if (host.includes("deezer")) return "deezer";
+  return "web";
+}
+function musicKindDetail(u: string): "song" | "album" | "playlist" {
+  const s = u.toLowerCase();
+  if (/\/playlist\/|[?&]list=|\/sets\//.test(s)) return "playlist";
+  if (/\/album\//.test(s) && !/[?&]i=/.test(s)) return "album";
+  return "song";
+}
+
+/** Apple Music URL → catalog id + kind (song id is the `i` param on an album URL). */
+function parseAppleMusic(u: string): { kind: "song" | "album" | "playlist"; id: string } | null {
+  try {
+    const url = new URL(u);
+    const song = url.searchParams.get("i");
+    if (song) return { kind: "song", id: song };
+    const p = url.pathname;
+    let m = p.match(/\/song\/[^/]+\/(\d+)/i); if (m) return { kind: "song", id: m[1]! };
+    m = p.match(/\/playlist\/[^/]+\/(pl\.[A-Za-z0-9-]+)/i); if (m) return { kind: "playlist", id: m[1]! };
+    m = p.match(/\/album\/[^/]+\/(\d+)/i); if (m) return { kind: "album", id: m[1]! };
+    return null;
+  } catch { return null; }
+}
+
+async function itunesResults(url: string): Promise<any[]> {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA, Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return [];
+    const d = await res.json() as any;
+    return Array.isArray(d?.results) ? d.results : [];
+  } catch { return []; }
+}
+async function itunesFirst(url: string): Promise<any | null> {
+  return (await itunesResults(url))[0] ?? null;
+}
+
+/** From a handful of iTunes search hits, pick the one that best matches the saved
+ *  track — preferring an exact title and the right artist, and penalising
+ *  remix/live/cover/sped-up variants — so a save of "Blinding Lights" doesn't
+ *  become "Blinding Lights (Remix)". */
+function pickBestSong(results: any[], title: string, artist: string | null): any | null {
+  const want = title.toLowerCase().trim();
+  const artistFirst = artist ? normTitle(artist).split(" ")[0] : null;
+  const score = (r: any): number => {
+    const tn = String(r.trackName ?? "").toLowerCase();
+    let s = 0;
+    if (tn === want) s += 100;
+    else if (normTitle(tn) === normTitle(want)) s += 40;
+    if (artistFirst && normTitle(String(r.artistName ?? "")).includes(artistFirst)) s += 25;
+    if (/\b(remix|sped up|slowed|cover|karaoke|live|instrumental|tribute|made famous)\b/i.test(tn)) s -= 40;
+    s -= Math.max(0, tn.length - want.length) * 0.1; // prefer fewer trailing suffixes
+    return s;
+  };
+  let best: any = null, bestScore = -Infinity;
+  for (const r of results) { const sc = score(r); if (sc > bestScore) { bestScore = sc; best = r; } }
+  return best;
+}
+
+/** Upscale an iTunes 100×100 artwork URL to 600×600. */
+function bigArtwork(u?: string): string | undefined {
+  return typeof u === "string" ? u.replace(/\/\d+x\d+bb\.(jpg|png)/i, "/600x600bb.$1") : undefined;
+}
+
+const normTitle = (s: string) => s.toLowerCase().replace(/\(.*?\)|\[.*?\]|feat\.?.*$/g, "").replace(/[^a-z0-9 ]/g, "").trim();
+
+/** Build a `.music` extract object from an iTunes track/collection result. Pure
+ *  and unit-testable. Keeps the source service's link and adds Apple Music. */
+export function musicFromItunes(
+  r: any, opts: { sourceUrl: string; sourcePlatform: string; kindDetail: string }
+): Record<string, unknown> | null {
+  if (!r) return null;
+  const links: { platform: string; url: string }[] = [{ platform: opts.sourcePlatform, url: opts.sourceUrl }];
+  const amUrl = r.trackViewUrl ?? r.collectionViewUrl;
+  if (amUrl && opts.sourcePlatform !== "appleMusic") links.push({ platform: "appleMusic", url: String(amUrl) });
+  return {
+    kind: "music",
+    kind_detail: opts.kindDetail,
+    title: r.trackName ?? r.collectionName ?? "",
+    artist: r.artistName ?? null,
+    album: r.collectionName ?? null,
+    artwork_url: bigArtwork(r.artworkUrl100) ?? r.artworkUrl100 ?? null,
+    duration_sec: r.trackTimeMillis ? Math.round(r.trackTimeMillis / 1000) : null,
+    preview_url: r.previewUrl ?? null,
+    apple_music_id: String(r.trackId ?? r.collectionId ?? "") || null,
+    links,
+    track_count: r.trackCount ?? null,
+  };
+}
+
+/** Best-effort artist from a music page's OpenGraph. Spotify/Apple format the
+ *  description as "Artist · Album · Song · Year" (artist first), sometimes behind
+ *  a "Listen to <track> on Spotify." preamble. */
+function artistFromMeta(meta: PageMeta): string | null {
+  const d = (meta.description ?? "").replace(/^listen to .*? on [a-z .]+?\.\s*/i, "").trim();
+  const seg = d.split(/\s*[·|]\s*/)[0]?.trim();
+  if (seg && seg.length <= 60 && !/^\d+$/.test(seg) && !/^song$|^single$|^album$/i.test(seg)) return seg;
+  const by = d.match(/\bby\s+([^·|,\n]+)/i)?.[1]?.trim();
+  return by || null;
+}
+
+/** Resolve a saved music URL into a `.music` extract (network + mapping). */
+export async function extractMusic(sourceUrl: string, meta: PageMeta, caption: string | null): Promise<Record<string, unknown> | null> {
+  const host = (() => { try { return new URL(sourceUrl).host.toLowerCase(); } catch { return ""; } })();
+  const platform = musicPlatform(host);
+  const kindDetail = musicKindDetail(sourceUrl);
+  const country = "gb";
+
+  if (platform === "appleMusic") {
+    const am = parseAppleMusic(sourceUrl);
+    if (am && am.kind !== "playlist") {
+      const r = await itunesFirst(`https://itunes.apple.com/lookup?id=${encodeURIComponent(am.id)}&country=${country}`);
+      const built = musicFromItunes(r, { sourceUrl, sourcePlatform: "appleMusic", kindDetail: am.kind });
+      if (built) return built;
+    }
+    // Playlist (or lookup miss): a minimal card from the page's OpenGraph.
+    return {
+      kind: "music", kind_detail: kindDetail,
+      title: meta.title ?? "Playlist", artist: artistFromMeta(meta), album: null,
+      artwork_url: meta.image ?? null, duration_sec: null, preview_url: null,
+      apple_music_id: null, links: [{ platform: "appleMusic", url: sourceUrl }], track_count: null,
+    };
+  }
+
+  // Non-Apple service: get title/artist from the page, then find it in the iTunes
+  // catalog for a preview + an Apple Music link.
+  const title = meta.title ?? caption ?? "";
+  const artist = artistFromMeta(meta);
+  const term = [artist, title].filter(Boolean).join(" ").trim();
+  if (term && kindDetail === "song") {
+    const hits = await itunesResults(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=song&limit=5&country=${country}`);
+    const r = pickBestSong(hits, title, artist);
+    // Only trust the match when BOTH the title and (if known) the artist overlap,
+    // so a search that surfaces a cover/remix doesn't mislabel the song. We keep
+    // the original service link + the page's own metadata either way.
+    const titleOk = r && normTitle(String(r.trackName ?? "")).split(" ").some((w: string) => w && normTitle(title).includes(w));
+    const artistOk = !artist || (r && normTitle(String(r.artistName ?? "")).split(" ").some((w: string) => w && normTitle(artist).includes(w)));
+    if (r && titleOk && artistOk) {
+      const built = musicFromItunes(r, { sourceUrl, sourcePlatform: platform, kindDetail: "song" });
+      if (built) return built;
+    }
+  }
+  // Fallback: a card from the page metadata alone (no preview / Apple Music link).
+  if (!title) return null;
+  return {
+    kind: "music", kind_detail: kindDetail,
+    title, artist, album: null,
+    artwork_url: meta.image ?? null, duration_sec: null, preview_url: null,
+    apple_music_id: null, links: [{ platform, url: sourceUrl }], track_count: null,
+  };
+}
+
 // Free public oEmbed endpoints (no key) — reliable title + thumbnail for
 // YouTube and TikTok, which don't expose useful OpenGraph to scrapers.
 function oembedEndpoint(url: string): string | null {
@@ -716,9 +888,15 @@ async function extractLive(cardId: string, card: any): Promise<void> {
       ? parseRecipe(recipeCaption)
       : null;
 
+  // Music: an Apple Music / Spotify / YouTube Music / … link → a previewable,
+  // service-agnostic music card.
+  const music = (!parsedRecipe && type !== "place" && isMusicHost(meta.finalUrl))
+    ? await extractMusic(meta.finalUrl, meta, card.caption).catch(() => null)
+    : null;
+
   // Shopping: a Shopify product (full variants via `/products/<handle>.js`) or a
   // generic schema.org Product. Only for non-recipe, non-place saves.
-  const shopifyProduct = (!parsedRecipe && type !== "place" && looksLikeProductURL(meta.finalUrl))
+  const shopifyProduct = (!parsedRecipe && type !== "place" && !music && looksLikeProductURL(meta.finalUrl))
     ? await fetchShopifyProduct(meta.finalUrl, meta.currency).catch(() => null)
     : null;
 
@@ -747,6 +925,16 @@ async function extractLive(cardId: string, card: any): Promise<void> {
       lng: null,
       category: card.extracted?.category ?? null,
     };
+  } else if (music) {
+    // A previewable, service-agnostic music card.
+    finalType = "link";
+    finalTitle = (music.title as string) || finalTitle;
+    finalDescription = [music.artist, music.album].filter(Boolean).join(" · ") || finalDescription;
+    if (music.artwork_url) {
+      thumb = (await cacheRemoteImage(music.artwork_url as string)) ?? (music.artwork_url as string) ?? thumb;
+      music.artwork_url = thumb;
+    }
+    extracted = music;
   } else if (shopifyProduct || meta.isProduct) {
     // A shoppable product. Shopify gives full variants; a generic schema.org
     // Product gives price/availability but no variants (Buy opens the page).

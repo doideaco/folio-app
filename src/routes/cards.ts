@@ -37,6 +37,9 @@ const patchSchema = z.object({
   record: z.record(z.string(), z.any()).optional(),
   // On-device recipe extraction (freeform captions → structured recipe).
   recipe: z.record(z.string(), z.any()).optional(),
+  // Structured shopping product / music item (replace `extracted`).
+  product: z.record(z.string(), z.any()).optional(),
+  music: z.record(z.string(), z.any()).optional(),
   event_at: z.string().datetime().nullable().optional(),
 });
 
@@ -279,6 +282,15 @@ export async function cardsRoutes(app: FastifyInstance) {
     if (patch.recipe !== undefined) {
       vals.push(JSON.stringify(patch.recipe));
       sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"recipe"}'::jsonb`);
+    }
+    // Replace with a structured product / music item.
+    if (patch.product !== undefined) {
+      vals.push(JSON.stringify(patch.product));
+      sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"product"}'::jsonb`);
+    }
+    if (patch.music !== undefined) {
+      vals.push(JSON.stringify(patch.music));
+      sets.push(`extracted = ($${vals.length}::jsonb) || '{"kind":"music"}'::jsonb`);
     }
     if (patch.event_at !== undefined) push("event_at", patch.event_at);
     else if (patch.clear_event_at) push("event_at", null);
