@@ -50,8 +50,11 @@ export async function runPriceSweep(now: Date): Promise<number> {
     const nowAvailable = fresh.available;
 
     const priceChanged = newPrice != null && newPrice !== oldPrice;
+    // A string change also catches a currency relabel (e.g. a card saved before
+    // the meta.json currency fix, "$40.00" → "£40.00") so old cards self-heal.
+    const priceStringChanged = fresh.price != null && fresh.price !== product.price;
     const availChanged = nowAvailable != null && nowAvailable !== wasAvailable;
-    if (!priceChanged && !availChanged) continue;
+    if (!priceStringChanged && !availChanged) continue;
 
     // Merge the fresh fields into the stored product; append a history point.
     const next: any = { ...product };

@@ -287,11 +287,36 @@ export function shopifyJsonToProduct(
   };
 }
 
+/** The store's base currency from `${origin}/meta.json` — the currency that
+ *  `product.js` prices are actually in. Crucially **geo-independent**: a UK store
+ *  returns GBP even when we fetch from a US server, unlike the page's JSON-LD
+ *  `priceCurrency`, which Shopify localizes to the requester's region. Cached per
+ *  origin (a shop's base currency doesn't change). */
+const shopCurrencyCache = new Map<string, string | null>();
+async function fetchShopCurrency(origin: string): Promise<string | null> {
+  if (shopCurrencyCache.has(origin)) return shopCurrencyCache.get(origin)!;
+  let cur: string | null = null;
+  try {
+    const res = await fetch(`${origin}/meta.json`, {
+      redirect: "follow",
+      headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (res.ok && !(res.headers.get("content-type") ?? "").includes("html")) {
+      const data = JSON.parse(await res.text());
+      if (typeof data?.currency === "string" && /^[A-Z]{3}$/.test(data.currency)) cur = data.currency;
+    }
+  } catch { /* fall back to the JSON-LD hint */ }
+  shopCurrencyCache.set(origin, cur);
+  return cur;
+}
+
 /** Fetch + map a Shopify product from a product page URL, or null if the page
  *  isn't a reachable Shopify product (also covers non-Shopify `/products/` URLs,
- *  whose `.js` returns HTML / no `variants`). */
+ *  whose `.js` returns HTML / no `variants`). `currencyHint` (from the page's
+ *  JSON-LD) is a fallback; the store's own `/meta.json` currency wins. */
 export async function fetchShopifyProduct(
-  pageUrl: string, currency?: string
+  pageUrl: string, currencyHint?: string
 ): Promise<Record<string, unknown> | null> {
   let origin: string, handle: string;
   try {
@@ -316,6 +341,7 @@ export async function fetchShopifyProduct(
     const text = await res.text();
     let data: any;
     try { data = JSON.parse(text); } catch { return null; }
+    const currency = (await fetchShopCurrency(origin)) ?? currencyHint;
     return shopifyJsonToProduct(data, origin, productUrl, currency);
   } catch { return null; }
 }
