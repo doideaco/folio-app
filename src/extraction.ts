@@ -71,6 +71,11 @@ interface PageMeta {
   siteName?: string;
   price?: string;   // e.g. "£24.00" — from JSON-LD product offers
   brand?: string;   // e.g. "Buster + Punch"
+  // Generic-product signals (schema.org Product), for non-Shopify shops.
+  isProduct?: boolean;
+  currency?: string;    // ISO code, e.g. "GBP"
+  available?: boolean;  // offers.availability ~ InStock
+  compareAt?: string;   // a higher "was" price for a sale strike-through
 }
 
 // A realistic desktop Safari UA. Non-hostile sites serve full OpenGraph to this;
@@ -119,6 +124,8 @@ function parseJsonLd(html: string, base: string): Partial<PageMeta> {
     const nodes: any[] = Array.isArray(data) ? data : data?.["@graph"] ? data["@graph"] : [data];
     for (const node of nodes) {
       if (!node || typeof node !== "object") continue;
+      const nodeType = ([] as string[]).concat(node["@type"] ?? []).join(",").toLowerCase();
+      if (nodeType.includes("product")) out.isProduct = true;
       if (!out.title && typeof node.name === "string") out.title = node.name.trim();
       if (!out.description && typeof node.description === "string") out.description = node.description.trim();
       if (!out.image) {
@@ -132,10 +139,21 @@ function parseJsonLd(html: string, base: string): Partial<PageMeta> {
       if (!out.brand && node.brand) {
         out.brand = typeof node.brand === "string" ? node.brand : node.brand?.name;
       }
-      if (!out.price && node.offers) {
+      if (node.offers) {
         const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers;
         const amount = offer?.price ?? offer?.lowPrice;
-        if (amount != null) out.price = formatPrice(String(amount), offer?.priceCurrency);
+        if (!out.price && amount != null) out.price = formatPrice(String(amount), offer?.priceCurrency);
+        if (!out.currency && offer?.priceCurrency) out.currency = String(offer.priceCurrency);
+        const avail = String(offer?.availability ?? "").toLowerCase();
+        if (out.available === undefined && avail) {
+          out.available = /instock|in_stock|limitedavailability|preorder|backorder/.test(avail);
+        }
+        // A struck-through "was" price: the high end of a price range above the
+        // current price (schema.org has no dedicated compare-at).
+        const high = offer?.highPrice;
+        if (!out.compareAt && high != null && Number(high) > Number(amount)) {
+          out.compareAt = formatPrice(String(high), offer?.priceCurrency);
+        }
       }
     }
   }
@@ -177,7 +195,155 @@ function extractPageMeta(html: string, finalUrl: string): PageMeta {
     siteName: metaContent(html, "og:site_name") ?? (host || undefined),
     price: jsonld.price,
     brand: jsonld.brand,
+    isProduct: jsonld.isProduct,
+    currency: jsonld.currency,
+    available: jsonld.available,
+    compareAt: jsonld.compareAt,
   };
+}
+
+// --- Shopify product detection ------------------------------------------------
+//
+// Any Shopify store exposes a product's full data at `/products/<handle>.js`
+// (the AJAX API): variants with ids, prices (in cents), per-variant availability,
+// and options (Size/Colour) — no API key. We use the variant ids to build a cart
+// permalink `…/cart/<id>:1` in the app.
+
+/** Does this URL look like a Shopify-style product page (`/products/<handle>`)? */
+function looksLikeProductURL(u: string): boolean {
+  try { return /\/products\/[^/?#]+/i.test(new URL(u).pathname); } catch { return false; }
+}
+
+/** Strip HTML to a capped plain-text description. */
+function stripHtmlText(html: string | null | undefined, max = 500): string | null {
+  if (!html) return null;
+  const text = decodeEntities(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, max) : null;
+}
+
+/** Map a Shopify product.js payload into our `.product` extract (pure/testable).
+ *  `currency` (ISO) comes from the page's JSON-LD when present — product.js has
+ *  no currency — and only affects the display symbol. */
+export function shopifyJsonToProduct(
+  p: any, origin: string, productUrl: string, currency?: string
+): Record<string, unknown> | null {
+  if (!p || typeof p !== "object" || !Array.isArray(p.variants)) return null;
+  const cents = (v: any): number => (typeof v === "number" ? v : Number(v));
+  const money = (c: any): string | null => {
+    const n = cents(c);
+    return Number.isFinite(n) ? formatPrice((n / 100).toFixed(2), currency) : null;
+  };
+  const img = (u: any): string | undefined => absolutize(typeof u === "string" ? u : u?.src, origin);
+
+  const options = (Array.isArray(p.options) ? p.options : []).map((o: any) =>
+    typeof o === "string"
+      ? { name: o, values: [] as string[] }
+      : { name: String(o?.name ?? ""), values: Array.isArray(o?.values) ? o.values.map(String) : [] }
+  );
+
+  const variants = p.variants.map((v: any) => ({
+    id: String(v?.id ?? ""),
+    title: String(v?.title ?? ""),
+    price: money(v?.price),
+    available: v?.available !== false,
+    options: Array.isArray(v?.options) && v.options.length
+      ? v.options.map(String)
+      : [v?.option1, v?.option2, v?.option3].filter((x: any) => x != null).map(String),
+  }));
+  // String-form options carry no values → derive them from the variants.
+  options.forEach((o: any, i: number) => {
+    if (!o.values.length) o.values = [...new Set(variants.map((v: any) => v.options[i]).filter(Boolean))];
+  });
+
+  const priceCentsList = p.variants
+    .filter((v: any) => v?.available !== false).map((v: any) => cents(v?.price))
+    .filter((n: number) => Number.isFinite(n));
+  const minCents = priceCentsList.length ? Math.min(...priceCentsList)
+    : Math.min(...p.variants.map((v: any) => cents(v?.price)).filter((n: number) => Number.isFinite(n)));
+  const price = money(p.price ?? (Number.isFinite(minCents) ? minCents : undefined));
+  const cmpRaw = p.compare_at_price_max ?? p.compare_at_price ?? p.compare_at_price_min;
+  const compareAt = Number.isFinite(cents(cmpRaw)) && cents(cmpRaw) > cents(p.price ?? minCents)
+    ? money(cmpRaw) : null;
+
+  const images = (Array.isArray(p.images) ? p.images : []).map(img).filter(Boolean) as string[];
+  const image = img(p.featured_image) ?? images[0] ?? null;
+
+  return {
+    kind: "product",
+    title: String(p.title ?? "").trim(),
+    description: stripHtmlText(p.description ?? p.body_html),
+    product_url: productUrl,
+    shop_domain: (() => { try { return new URL(origin).host; } catch { return null; } })(),
+    currency: currency ?? null,
+    price,
+    compare_at_price: compareAt,
+    available: p.available !== false && variants.some((v: any) => v.available),
+    vendor: p.vendor ? String(p.vendor) : null,
+    options,
+    variants,
+    image,
+    images,
+    price_history: [],
+  };
+}
+
+/** Fetch + map a Shopify product from a product page URL, or null if the page
+ *  isn't a reachable Shopify product (also covers non-Shopify `/products/` URLs,
+ *  whose `.js` returns HTML / no `variants`). */
+export async function fetchShopifyProduct(
+  pageUrl: string, currency?: string
+): Promise<Record<string, unknown> | null> {
+  let origin: string, handle: string;
+  try {
+    const u = new URL(pageUrl);
+    const m = u.pathname.match(/\/products\/([^/?#]+)/i);
+    if (!m) return null;
+    origin = u.origin;
+    handle = m[1]!;
+  } catch { return null; }
+  const productUrl = `${origin}/products/${handle}`;
+  try {
+    const res = await fetch(`${productUrl}.js`, {
+      redirect: "follow",
+      headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!res.ok) return null;
+    // Shopify serves product.js as `text/javascript`; only bail on HTML (a
+    // non-Shopify `/products/` page). The `variants` guard in the mapper covers
+    // anything else that parses but isn't a product.
+    if ((res.headers.get("content-type") ?? "").includes("html")) return null;
+    const text = await res.text();
+    let data: any;
+    try { data = JSON.parse(text); } catch { return null; }
+    return shopifyJsonToProduct(data, origin, productUrl, currency);
+  } catch { return null; }
+}
+
+/** Re-check a saved product's live price/availability, for the price-watch
+ *  worker. Shopify products re-fetch full variants via `.js`; generic products
+ *  re-scrape the page's JSON-LD. Returns null when the item can't be refreshed. */
+export async function refetchProduct(
+  product: any
+): Promise<{ price: string | null; compareAt: string | null; available: boolean | null; variants?: any[]; options?: any[] } | null> {
+  const url = product?.product_url;
+  if (typeof url !== "string" || !url) return null;
+  if (product.shop_domain) {
+    const fresh = await fetchShopifyProduct(url, product.currency ?? undefined);
+    if (!fresh) return null;
+    return {
+      price: (fresh.price as string) ?? null,
+      compareAt: (fresh.compare_at_price as string) ?? null,
+      available: (fresh.available as boolean) ?? null,
+      variants: fresh.variants as any[],
+      options: fresh.options as any[],
+    };
+  }
+  try {
+    const meta = await fetchMetadata(url);
+    if (!meta.isProduct && meta.price == null) return null;
+    return { price: meta.price ?? null, compareAt: meta.compareAt ?? null, available: meta.available ?? null };
+  } catch { return null; }
 }
 
 // Free public oEmbed endpoints (no key) — reliable title + thumbnail for
@@ -505,7 +671,7 @@ async function extractLive(cardId: string, card: any): Promise<void> {
 
   // Re-host the thumbnail on our bucket so it's stable/fast (falls back to the
   // origin URL if caching fails or storage isn't configured).
-  const thumb = meta.image ? (await cacheRemoteImage(meta.image)) ?? meta.image : null;
+  let thumb = meta.image ? (await cacheRemoteImage(meta.image)) ?? meta.image : null;
 
   // Fold product signals (brand · price) into the description so shopping saves
   // carry context even when the page has a thin OG description.
@@ -523,6 +689,12 @@ async function extractLive(cardId: string, card: any): Promise<void> {
     type !== "place" && (card.type === "recipe" || looksLikeRecipe(recipeCaption))
       ? parseRecipe(recipeCaption)
       : null;
+
+  // Shopping: a Shopify product (full variants via `/products/<handle>.js`) or a
+  // generic schema.org Product. Only for non-recipe, non-place saves.
+  const shopifyProduct = (!parsedRecipe && type !== "place" && looksLikeProductURL(meta.finalUrl))
+    ? await fetchShopifyProduct(meta.finalUrl, meta.currency).catch(() => null)
+    : null;
 
   let finalType = type;
   let finalTitle = title;
@@ -549,6 +721,34 @@ async function extractLive(cardId: string, card: any): Promise<void> {
       lng: null,
       category: card.extracted?.category ?? null,
     };
+  } else if (shopifyProduct || meta.isProduct) {
+    // A shoppable product. Shopify gives full variants; a generic schema.org
+    // Product gives price/availability but no variants (Buy opens the page).
+    const prod: Record<string, any> = shopifyProduct ?? {
+      kind: "product",
+      title: meta.title ?? host ?? "Product",
+      description: meta.description ?? null,
+      product_url: meta.finalUrl,
+      shop_domain: null,
+      currency: meta.currency ?? null,
+      price: meta.price ?? null,
+      compare_at_price: meta.compareAt ?? null,
+      available: meta.available ?? null,
+      vendor: meta.brand ?? null,
+      options: [],
+      variants: [],
+      image: meta.image ?? null,
+      images: meta.image ? [meta.image] : [],
+      price_history: [],
+    };
+    // Prefer the cached OG thumbnail for a stable hero; else cache a product image.
+    if (!thumb && Array.isArray(prod.images) && prod.images[0]) {
+      thumb = (await cacheRemoteImage(prod.images[0])) ?? prod.images[0];
+    }
+    prod.image = thumb ?? prod.image ?? null;
+    finalTitle = (prod.title as string) || finalTitle;
+    finalDescription = (prod.description as string | null) ?? finalDescription;
+    extracted = prod;
   } else {
     // Social captions (TikTok/IG) arrive as a long title → show a clean bold
     // headline and move the full caption into the body, not the title.

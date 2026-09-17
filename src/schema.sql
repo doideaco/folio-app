@@ -197,6 +197,10 @@ CREATE INDEX IF NOT EXISTS change_log_board_seq_idx ON change_log (board_id, seq
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS background text;
 ALTER TABLE cards  ADD COLUMN IF NOT EXISTS background text;
 
+-- Last time the price-watch worker re-checked a product card's price. Server-
+-- internal (not synced); paces re-fetches so we don't hammer stores.
+ALTER TABLE cards  ADD COLUMN IF NOT EXISTS last_price_checked_at timestamptz;
+
 -- Trigger helpers ----------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION log_change() RETURNS trigger AS $$
