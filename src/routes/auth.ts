@@ -55,6 +55,15 @@ export async function authRoutes(app: FastifyInstance) {
     };
   });
 
+  // The authenticated user — fetched on app launch so the client always knows
+  // who it is (its own id, for ownership checks) even after a relaunch.
+  app.get("/me", async (req) => {
+    const userId = await requireUserId(req);
+    const user = await one<any>("SELECT * FROM users WHERE id = $1", [userId]);
+    if (!user) throw notFound();
+    return serialize.user(user);
+  });
+
   // Set / change the current user's handle.
   app.post("/me/handle", async (req) => {
     const userId = await requireUserId(req);
