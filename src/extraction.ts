@@ -557,10 +557,35 @@ export async function extractMusic(sourceUrl: string, meta: PageMeta, caption: s
 
   if (platform === "appleMusic") {
     const am = parseAppleMusic(sourceUrl);
-    if (am && am.kind !== "playlist") {
+    if (am && am.kind === "song") {
       const r = await itunesFirst(`https://itunes.apple.com/lookup?id=${encodeURIComponent(am.id)}&country=${country}`);
-      const built = musicFromItunes(r, { sourceUrl, sourcePlatform: "appleMusic", kindDetail: am.kind });
+      const built = musicFromItunes(r, { sourceUrl, sourcePlatform: "appleMusic", kindDetail: "song" });
       if (built) return built;
+    }
+    if (am && am.kind === "album") {
+      // Album URL: fetch its tracks. A single (1 track — which is how Apple Music
+      // shares an individual single) becomes a proper song WITH a preview; a real
+      // album keeps its album card but borrows the first track's preview so the
+      // play button works.
+      const results = await itunesResults(`https://itunes.apple.com/lookup?id=${encodeURIComponent(am.id)}&entity=song&limit=50&country=${country}`);
+      const collection = results.find((x) => x?.wrapperType === "collection") ?? null;
+      const songs = results.filter((x) => x?.wrapperType === "track" || x?.kind === "song");
+      const first = songs[0] ?? null;
+      if (collection && (collection.trackCount === 1 || songs.length === 1) && first) {
+        const built = musicFromItunes(first, { sourceUrl, sourcePlatform: "appleMusic", kindDetail: "song" });
+        if (built) return built;
+      }
+      if (collection) {
+        const built = musicFromItunes(collection, { sourceUrl, sourcePlatform: "appleMusic", kindDetail: "album" });
+        if (built) {
+          if (first?.previewUrl) built.preview_url = first.previewUrl;
+          return built;
+        }
+      }
+      if (first) {
+        const built = musicFromItunes(first, { sourceUrl, sourcePlatform: "appleMusic", kindDetail: "song" });
+        if (built) return built;
+      }
     }
     // Playlist (or lookup miss): a minimal card from the page's OpenGraph.
     return {
