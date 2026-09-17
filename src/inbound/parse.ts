@@ -1019,47 +1019,70 @@ function extractParking(
   const lines = lineList(body);
   const provider = isJustPark ? "JustPark" : merchantName(from, subject);
 
-  // Booking reference: a labelled ref, else a #-prefixed code in subject/body
-  // (JustPark's is "#112082940").
+  // Booking reference: a labelled ref ("Booking ID 112082940"), else a #-prefixed
+  // code in the subject/body ("#112082940").
   const refRaw =
     valueAfter(lines, /^(booking (reference|ref|id)|reference|confirmation)\b/i)?.match(/[A-Z0-9]{5,}/i)?.[0] ??
     `${subject}\n${body}`.match(/#\s?(\d{6,})/)?.[1] ??
     null;
   const ref = refRaw ? refRaw.replace(/^#/, "") : null;
 
-  // Location of the space (drives the title and a mappable place).
-  const location =
-    valueAfter(lines, /^(location|address|parking (at|near|space)|where)\b/i) ??
-    subject.match(/parking (?:at|near|in)\s+(.+)$/i)?.[1]?.trim() ??
-    null;
+  // Location: JustPark lists it under a "Booking details:" heading as a venue
+  // name line then an address line. Fall back to a labelled Location/Address.
+  let venueName: string | null = null, address: string | null = null;
+  const bdIdx = lines.findIndex((l) => /^booking details:?\s*$/i.test(l));
+  if (bdIdx >= 0) {
+    const name = lines[bdIdx + 1]?.trim();
+    const addr = lines[bdIdx + 2]?.trim();
+    if (name && !/^booking id/i.test(name)) venueName = name.slice(0, 80);
+    if (addr && /[,\d]/.test(addr) && !/^booking id/i.test(addr) && !/^vrm/i.test(addr)) address = addr.slice(0, 120);
+  }
+  if (!venueName) {
+    venueName = valueAfter(lines, /^(location|address|parking (at|near|space)|where)\b/i)
+      ?? subject.match(/parking (?:at|near|in)\s+(.+)$/i)?.[1]?.trim() ?? null;
+  }
+  const location = [venueName, address].filter(Boolean).join(", ") || null;
 
-  // Arrival is the actionable date; only trust a clearly-labelled line.
-  const arriveStr = valueAfter(lines, /^(arriv(al|e)?|entry|from|start(s|ing)?)\b/i);
-  const arrive = parseWhen(arriveStr, now);
-  const leaveStr = valueAfter(lines, /^(leav(e|ing)?|depart(ure)?|until|end(s|ing)?|exit)\b/i);
-  const vehicle = valueAfter(lines, /^(vehicle|registration|reg(\.|:)?|number ?plate|car reg)\b/i);
-  const amount = money(
-    valueAfter(lines, /^(total( paid| price| cost)?|amount( paid)?|you paid|price)\b/i) ??
-    body.match(/[£€$]\s?\d[\d,]*(?:\.\d{2})?/)?.[0] ?? null
-  );
+  // Stay window: JustPark lists two bare "Weekday Nth Month" lines, each followed
+  // by an "HH:MM" line (arrival then departure). Pair them up.
+  const dateLineRe = /^(mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?\s+[a-z]/i;
+  const stays: { display: string; iso: string | null }[] = [];
+  for (let i = 0; i < lines.length && stays.length < 2; i++) {
+    if (!dateLineRe.test(lines[i]!)) continue;
+    const timeLine = /^\d{1,2}:\d{2}$/.test(lines[i + 1] ?? "") ? lines[i + 1]! : "";
+    const display = `${lines[i]!}${timeLine ? " " + timeLine : ""}`.replace(/\s+/g, " ").trim();
+    stays.push({ display, iso: parseWhen(display, now)?.iso ?? null });
+  }
+  const arrive = stays[0] ?? null;
+  const leave = stays[1] ?? null;
+
+  // Vehicle registration ("VRM: CV26HXX").
+  const vehicle =
+    body.match(/\bVRM[:\s]+([A-Z0-9]{2,4}\s?[A-Z0-9]{2,4})\b/i)?.[1]?.replace(/\s+/g, "").toUpperCase()
+    ?? valueAfter(lines, /^(vehicle|registration|reg\b|number ?plate|car reg)\b/i)
+        ?.replace(/\s+/g, "").match(/[A-Z0-9]{5,8}/i)?.[0]?.toUpperCase()
+    ?? null;
+
+  // Amount: the first money-with-pence in the body (JustPark's total).
+  const amount = money(body.match(/[£€$]\s?\d[\d,]*\.\d{2}/)?.[0] ?? null);
 
   // Don't emit a hollow card — need at least one solid signal.
   if (!ref && !arrive && !location) return null;
 
   const fields: Field[] = [];
   if (ref) fields.push({ label: "Booking ref", value: `#${ref}`, copyable: true });
-  if (arriveStr) fields.push({ label: "Arrive", value: arriveStr.replace(/\s+/g, " ").slice(0, 60), copyable: false });
-  if (leaveStr) fields.push({ label: "Leave", value: leaveStr.replace(/\s+/g, " ").slice(0, 60), copyable: false });
-  if (vehicle) fields.push({ label: "Vehicle", value: vehicle.replace(/\s+/g, " ").slice(0, 24), copyable: false });
+  if (arrive) fields.push({ label: "Arrive", value: arrive.display.slice(0, 60), copyable: false });
+  if (leave) fields.push({ label: "Leave", value: leave.display.slice(0, 60), copyable: false });
+  if (vehicle) fields.push({ label: "Vehicle", value: vehicle.slice(0, 12), copyable: true });
 
-  const title = `🅿️ Parking${location ? ` · ${location.replace(/\s+/g, " ").slice(0, 60)}` : ""}`;
+  const title = `🅿️ Parking${venueName ? ` · ${venueName.replace(/\s+/g, " ").slice(0, 60)}` : ""}`;
   return recordCard({
     board: BOARD.trips, recordKind: "parking",
     title: title.slice(0, 140),
     subtitle: location ? location.replace(/\s+/g, " ").slice(0, 120) : "Parking booked",
     dateLabel: arrive ? "Arrive" : null, date: arrive?.iso ?? null,
     fields, amount,
-    place: location ? { name: location.replace(/\s+/g, " ").slice(0, 80), address: location, category: "parking" } : null,
+    place: venueName ? { name: venueName, address: address ?? venueName, category: "parking" } : null,
     provider, status: "Booked",
     brandDomain: brandDomain(provider, from),
     actionUrl: sourceUrl, sourceUrl, thumb,

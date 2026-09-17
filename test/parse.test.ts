@@ -384,12 +384,52 @@ test("JustPark HTML-only email → parking record (not a bare code)", () => {
   assert.equal(p.boardName, "Trips");
   assert.match(r.title, /Southwark/);              // location, not "#112082940"
   assert.equal(field(r, "Booking ref"), "#112082940");
-  assert.equal(field(r, "Vehicle"), "AB12 CDE");
+  assert.equal(field(r, "Vehicle"), "AB12CDE");    // plate normalised (space stripped)
   assert.equal(r.amount, "£12.50");
   assert.equal(r.provider, "JustPark");
   assert.ok(r.date?.startsWith("2026-09-20"), `date was ${r.date}`);
   assert.equal(p.eventAt, r.date);
   assert.equal(r.place?.category, "parking");       // mappable
+});
+
+// The real JustPark layout: bare "Weekday Nth Month" + "HH:MM" date pairs, a
+// "Booking details:" address block, "VRM:", and "Total:\nTotal:\n£x".
+const JUSTPARK_REAL = `Sent from my iPhone
+Begin forwarded message:
+Welcome to JustPark .
+Your booking is confirmed!
+Below you'll find all you need to know about your upcoming booking.
+Saturday 19th September
+17:00
+Sunday 20th September
+21:00
+Booking details:
+Citadines Holborn Car Park
+94A High Holborn, London, WC1R 4AP
+VRM: CV26HXX
+Booking ID 112082940
+Total:
+Total:
+£66.99
+Download Receipt`;
+
+test("real JustPark layout → full parking record (venue, dates, VRM, total)", () => {
+  const p = parseInboundEmail(
+    { to: "alex-abc@folioinbox.me", from: "no-reply@justpark.com",
+      subject: "Fwd: Ahh, that’s parking sorted 💆 #112082940", text: JUSTPARK_REAL },
+    { now: new Date("2026-09-17T11:00:00Z") }
+  );
+  const r = record(p);
+  assert.equal(r.record_kind, "parking");
+  assert.match(r.title, /Citadines Holborn/);
+  assert.equal(field(r, "Booking ref"), "#112082940");
+  assert.equal(field(r, "Vehicle"), "CV26HXX");
+  assert.match(field(r, "Arrive") ?? "", /19th September 17:00/);
+  assert.match(field(r, "Leave") ?? "", /20th September 21:00/);
+  assert.ok(r.date?.startsWith("2026-09-19"), `date was ${r.date}`);
+  assert.equal(p.eventAt, r.date);
+  assert.equal(r.amount, "£66.99");
+  assert.match(r.place?.address ?? "", /High Holborn/);   // mappable full address
 });
 
 test("source_url skips the fonts/asset link, keeps the real booking URL", () => {
