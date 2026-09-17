@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { parseInboundEmail, type InboundEmail } from "../src/inbound/parse.js";
+import { parseInboundEmail, emailBodyText, type InboundEmail } from "../src/inbound/parse.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const samplesDir = join(here, "..", "samples");
@@ -345,4 +345,61 @@ test("real Booking.com .eml (91KB text/html part) also extracts the record", () 
   assert.equal(r.record_kind, "lodging");
   assert.equal(field(r, "Confirmation"), "5833740861");
   assert.ok(r.date?.startsWith("2026-07-15"), `date was ${r.date}`);
+});
+
+// ---- Parking + HTML-only capture (JustPark regression) ---------------------
+//
+// Real transactional mail (JustPark) is HTML-only with no text/plain part and a
+// `<head>` <link href=fonts.googleapis…>. Before the fix this landed as a thin
+// "code" record: source_url = the fonts stylesheet, and raw_text = the subject
+// only (so on-device extraction had nothing). These lock in all three fixes.
+
+const JUSTPARK_HTML = `<!DOCTYPE html><html><head>
+<link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet">
+<style>.x{color:red}</style></head><body>
+<span style="display:none">TransactionsHanoff_email</span>
+<table><tr><td>Welcome to JustPark</td></tr>
+<tr><td>Your booking is confirmed! Just turn up, park &amp; get on with your day.</td></tr>
+<tr><td>Booking reference</td><td>#112082940</td></tr>
+<tr><td>Location</td><td>12 Southwark Street, London SE1 1RQ</td></tr>
+<tr><td>Arrival</td><td>Saturday 20 Sep 2026, 09:00</td></tr>
+<tr><td>Leave</td><td>Saturday 20 Sep 2026, 18:00</td></tr>
+<tr><td>Vehicle</td><td>AB12 CDE</td></tr>
+<tr><td>Total paid</td><td>£12.50</td></tr></table>
+<a href="https://www.justpark.com/dashboard/bookings/112082940">Manage booking</a>
+</body></html>`;
+
+function parseJustPark() {
+  return parseInboundEmail(
+    { to: "alex-abc@folioinbox.me", from: "no-reply@justpark.com",
+      subject: "Fwd: Ahh, that’s parking sorted 💆 #112082940", html: JUSTPARK_HTML },
+    { now: new Date("2026-09-16T11:00:00Z") }
+  );
+}
+
+test("JustPark HTML-only email → parking record (not a bare code)", () => {
+  const p = parseJustPark();
+  const r = record(p);
+  assert.equal(r.record_kind, "parking");
+  assert.equal(p.boardName, "Trips");
+  assert.match(r.title, /Southwark/);              // location, not "#112082940"
+  assert.equal(field(r, "Booking ref"), "#112082940");
+  assert.equal(field(r, "Vehicle"), "AB12 CDE");
+  assert.equal(r.amount, "£12.50");
+  assert.equal(r.provider, "JustPark");
+  assert.ok(r.date?.startsWith("2026-09-20"), `date was ${r.date}`);
+  assert.equal(p.eventAt, r.date);
+  assert.equal(r.place?.category, "parking");       // mappable
+});
+
+test("source_url skips the fonts/asset link, keeps the real booking URL", () => {
+  const p = parseJustPark();
+  assert.equal(p.sourceUrl, "https://www.justpark.com/dashboard/bookings/112082940");
+});
+
+test("emailBodyText renders an HTML-only body (raw_text isn't just the subject)", () => {
+  const body = emailBodyText({ to: "x", from: "no-reply@justpark.com", html: JUSTPARK_HTML });
+  assert.match(body, /Booking reference/);
+  assert.match(body, /Southwark Street/);
+  assert.ok(body.length > 100, `body was only ${body.length} chars`);
 });

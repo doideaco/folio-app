@@ -127,10 +127,23 @@ function typeOf(node: any): string {
   return ([] as string[]).concat(node?.["@type"] ?? []).join(",").toLowerCase();
 }
 
-function firstUrl(text?: string, html?: string): string | null {
+/** Page furniture that is never the link the user cares about: web-font CDNs,
+ *  analytics/tracking, spec URLs, and email-open beacons. */
+const JUNK_URL = /(?:fonts\.googleapis|fonts\.gstatic|schema\.org|w3\.org|googletagmanager|google-analytics|doubleclick|list-manage|sendgrid\.net|sparkpost|mailchimp|\/wf\/open|\/pixel|\/beacon|utm_medium=email&utm)/i;
+/** Static-asset URLs (stylesheets, scripts, images, fonts) — not actionable. */
+const ASSET_EXT = /\.(?:css|js|png|jpe?g|gif|svg|webp|woff2?|ttf|ico)(?:[?#]|$)/i;
+
+/** The first *actionable* URL in the email — skipping stylesheets, tracking
+ *  pixels, analytics and font CDNs (a naive first-match grabs the `<head>`
+ *  `fonts.googleapis.com` link). Null when nothing meaningful remains. */
+function pickSourceUrl(text?: string, html?: string): string | null {
   const hay = `${text ?? ""}\n${html ?? ""}`;
-  const m = hay.match(/https?:\/\/[^\s"'<>)]+/);
-  return m ? m[0] : null;
+  const urls = hay.match(/https?:\/\/[^\s"'<>)]+/g) ?? [];
+  for (const u of urls) {
+    if (JUNK_URL.test(u) || ASSET_EXT.test(u)) continue;
+    return u;
+  }
+  return null;
 }
 
 // Turn HTML into line-structured text. Block boundaries (and table cells)
@@ -279,7 +292,7 @@ function cleanSnippet(text: string): string | null {
 export function parseInboundEmail(email: InboundEmail, opts?: { now?: Date }): ParsedInbound {
   const { subject, from, text: bodyText } = unwrapForwarded(email);
   const thumb = firstImageAttachment(email.attachments);
-  const sourceUrl = firstUrl(email.text, email.html);
+  const sourceUrl = pickSourceUrl(email.text, email.html);
   const nodes = collectJsonLd(email.html);
 
   // 1) Structured reservation from JSON-LD.
@@ -376,6 +389,7 @@ export function parseInboundEmail(email: InboundEmail, opts?: { now?: Date }): P
     extractLodging(subject, from, cleanText, sourceUrl, thumb, now) ??
     extractTrain(subject, from, cleanText, sourceUrl, thumb, now) ??
     extractEvent(subject, from, cleanText, sourceUrl, thumb, now) ??
+    extractParking(subject, from, cleanText, sourceUrl, thumb, now) ??
     extractOrder(subject, from, cleanText, sourceUrl, thumb, now);
   if (rec) return rec;
 
@@ -461,6 +475,16 @@ function stripForwardHeaders(text: string): string {
     // so a body field like Ryanair's bare "Date:" (value on the next line) stays.
     .filter((l) => !/^\s*(from|to|cc|bcc|reply-to|sent|subject|date)\s*:\s*\S/i.test(l))
     .join("\n");
+}
+
+/** The best plain-text rendering of an email body: the `text/plain` part when
+ *  present, else the HTML stripped to lines, with forwarded-header noise removed.
+ *  Persisted as the card's `raw_text` so on-device extraction has real content —
+ *  most transactional senders (JustPark, airlines) are HTML-only, so relying on
+ *  `email.text` alone leaves only the subject to parse. */
+export function emailBodyText(email: InboundEmail): string {
+  const raw = (email.text?.trim() || stripHtml(email.html));
+  return stripForwardHeaders(raw).replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Split body text into trimmed, non-empty lines. */
@@ -975,6 +999,68 @@ function extractEvent(
     dateLabel: "Starts", date: when?.iso ?? null,
     fields, amount, provider, status: "Booked",
     place: venue ? { name: venue, address: venue, category: "venue" } : null,
+    brandDomain: brandDomain(provider, from),
+    actionUrl: sourceUrl, sourceUrl, thumb,
+  });
+}
+
+function extractParking(
+  subject: string, from: string, body: string, sourceUrl: string | null,
+  thumb: ParsedInbound["thumb"], now: Date
+): ParsedInbound | null {
+  const hay = `${from} ${subject} ${body}`.toLowerCase();
+  const isJustPark = /justpark/.test(hay);
+  const parky = /\bparking\b|\bcar\s?park\b|\bpark\s+&\s+ride\b/.test(hay);
+  // JustPark is unambiguous; otherwise require a booking cue so a mere "free
+  // parking" mention in an unrelated email doesn't masquerade as a booking.
+  const confirmy = /\b(booking confirmed|your booking|reservation|confirmed|booking reference)\b/.test(hay);
+  if (!isJustPark && !(parky && confirmy)) return null;
+
+  const lines = lineList(body);
+  const provider = isJustPark ? "JustPark" : merchantName(from, subject);
+
+  // Booking reference: a labelled ref, else a #-prefixed code in subject/body
+  // (JustPark's is "#112082940").
+  const refRaw =
+    valueAfter(lines, /^(booking (reference|ref|id)|reference|confirmation)\b/i)?.match(/[A-Z0-9]{5,}/i)?.[0] ??
+    `${subject}\n${body}`.match(/#\s?(\d{6,})/)?.[1] ??
+    null;
+  const ref = refRaw ? refRaw.replace(/^#/, "") : null;
+
+  // Location of the space (drives the title and a mappable place).
+  const location =
+    valueAfter(lines, /^(location|address|parking (at|near|space)|where)\b/i) ??
+    subject.match(/parking (?:at|near|in)\s+(.+)$/i)?.[1]?.trim() ??
+    null;
+
+  // Arrival is the actionable date; only trust a clearly-labelled line.
+  const arriveStr = valueAfter(lines, /^(arriv(al|e)?|entry|from|start(s|ing)?)\b/i);
+  const arrive = parseWhen(arriveStr, now);
+  const leaveStr = valueAfter(lines, /^(leav(e|ing)?|depart(ure)?|until|end(s|ing)?|exit)\b/i);
+  const vehicle = valueAfter(lines, /^(vehicle|registration|reg(\.|:)?|number ?plate|car reg)\b/i);
+  const amount = money(
+    valueAfter(lines, /^(total( paid| price| cost)?|amount( paid)?|you paid|price)\b/i) ??
+    body.match(/[£€$]\s?\d[\d,]*(?:\.\d{2})?/)?.[0] ?? null
+  );
+
+  // Don't emit a hollow card — need at least one solid signal.
+  if (!ref && !arrive && !location) return null;
+
+  const fields: Field[] = [];
+  if (ref) fields.push({ label: "Booking ref", value: `#${ref}`, copyable: true });
+  if (arriveStr) fields.push({ label: "Arrive", value: arriveStr.replace(/\s+/g, " ").slice(0, 60), copyable: false });
+  if (leaveStr) fields.push({ label: "Leave", value: leaveStr.replace(/\s+/g, " ").slice(0, 60), copyable: false });
+  if (vehicle) fields.push({ label: "Vehicle", value: vehicle.replace(/\s+/g, " ").slice(0, 24), copyable: false });
+
+  const title = `🅿️ Parking${location ? ` · ${location.replace(/\s+/g, " ").slice(0, 60)}` : ""}`;
+  return recordCard({
+    board: BOARD.trips, recordKind: "parking",
+    title: title.slice(0, 140),
+    subtitle: location ? location.replace(/\s+/g, " ").slice(0, 120) : "Parking booked",
+    dateLabel: arrive ? "Arrive" : null, date: arrive?.iso ?? null,
+    fields, amount,
+    place: location ? { name: location.replace(/\s+/g, " ").slice(0, 80), address: location, category: "parking" } : null,
+    provider, status: "Booked",
     brandDomain: brandDomain(provider, from),
     actionUrl: sourceUrl, sourceUrl, thumb,
   });

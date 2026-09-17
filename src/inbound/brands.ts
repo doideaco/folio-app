@@ -37,6 +37,7 @@ const OVERRIDES: [RegExp, string][] = [
   [/expedia/i, "expedia.com"],
   [/trainline/i, "thetrainline.com"],
   [/eurostar/i, "eurostar.com"],
+  [/just ?park/i, "justpark.com"],
   [/ticketmaster/i, "ticketmaster.com"],
   [/eventbrite/i, "eventbrite.com"],
   [/\bdice\b/i, "dice.fm"],

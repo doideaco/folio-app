@@ -6,7 +6,7 @@ import { requireUserId } from "../auth.js";
 import { config } from "../config.js";
 import { putObject, storageEnabled } from "../storage.js";
 import { notifyBoard } from "../push.js";
-import { parseInboundEmail, type InboundEmail } from "../inbound/parse.js";
+import { parseInboundEmail, emailBodyText, type InboundEmail } from "../inbound/parse.js";
 import { reconcileKey, mergeRecords, diffRecords, type Rec } from "../inbound/reconcile.js";
 import { resolveBrandLogo, imageSize } from "../inbound/brandLogo.js";
 
@@ -129,7 +129,9 @@ export async function inboundRoutes(app: FastifyInstance) {
     }
 
     // Keep a capped copy of the email so on-device extraction can deep-parse it.
-    const rawText = `${email.subject ?? ""}\n\n${email.text ?? ""}`.slice(0, 6000).trim() || null;
+    // Use the rendered body (falls back to stripped HTML) — most transactional
+    // senders are HTML-only, so `email.text` alone would leave just the subject.
+    const rawText = `${email.subject ?? ""}\n\n${emailBodyText(email)}`.slice(0, 6000).trim() || null;
     const key = (parsed.extracted as Rec).kind === "record" ? reconcileKey(parsed.extracted as Rec) : null;
 
     // --- Reconciliation: a later email about the same booking updates the same
