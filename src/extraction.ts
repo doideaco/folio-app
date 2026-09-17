@@ -372,6 +372,61 @@ export async function refetchProduct(
   } catch { return null; }
 }
 
+// --- Video (YouTube) ---------------------------------------------------------
+//
+// A saved YouTube link becomes a clean `.video` card (thumbnail, channel, open in
+// the app), gathered on a "Watch Later" board. Keyless via YouTube's oEmbed
+// endpoint (title + author_name + thumbnail); duration/views would need the
+// YouTube Data API key and are left null.
+
+/** A YouTube host — but NOT music.youtube.com (that routes to the music path). */
+function isYouTubeHost(u: string): boolean {
+  try {
+    const h = new URL(u).host.toLowerCase();
+    return (/(?:^|\.)(?:youtube\.com|youtu\.be)$/i.test(h)) && !h.startsWith("music.");
+  } catch { return false; }
+}
+function youtubeKindDetail(u: string): "video" | "short" | "playlist" | "channel" {
+  const s = u.toLowerCase();
+  if (/\/shorts\//.test(s)) return "short";
+  if (/[?&]list=|\/playlist/.test(s)) return "playlist";
+  if (/\/channel\/|\/@|\/c\/|\/user\//.test(s)) return "channel";
+  return "video";
+}
+
+/** Resolve a saved YouTube URL into a `.video` extract via oEmbed (keyless). */
+export async function extractYouTube(sourceUrl: string, meta: PageMeta): Promise<Record<string, unknown> | null> {
+  const kindDetail = youtubeKindDetail(sourceUrl);
+  let title = meta.title ?? null;
+  let channel: string | null = null, channelURL: string | null = null;
+  let thumb = meta.image ?? null;
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(sourceUrl)}&format=json`, {
+      headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const d = await res.json() as any;
+      if (d.title) title = d.title;
+      channel = d.author_name ?? null;
+      channelURL = d.author_url ?? null;
+      if (d.thumbnail_url) thumb = d.thumbnail_url;
+    }
+  } catch { /* fall back to the page metadata */ }
+  if (!title) return null;
+  return {
+    kind: "video",
+    kind_detail: kindDetail,
+    title,
+    channel,
+    channel_url: channelURL,
+    thumbnail_url: thumb,
+    video_url: sourceUrl,
+    duration_sec: null,
+    views: null,
+  };
+}
+
 // --- Music (Apple Music / Spotify / YouTube Music / SoundCloud / Tidal) -------
 //
 // A saved music link becomes a normalized `.music` card that can be previewed and
@@ -894,9 +949,14 @@ async function extractLive(cardId: string, card: any): Promise<void> {
     ? await extractMusic(meta.finalUrl, meta, card.caption).catch(() => null)
     : null;
 
+  // A YouTube video → a clean `.video` card (Watch Later board).
+  const video = (!parsedRecipe && type !== "place" && !music && isYouTubeHost(meta.finalUrl))
+    ? await extractYouTube(meta.finalUrl, meta).catch(() => null)
+    : null;
+
   // Shopping: a Shopify product (full variants via `/products/<handle>.js`) or a
   // generic schema.org Product. Only for non-recipe, non-place saves.
-  const shopifyProduct = (!parsedRecipe && type !== "place" && !music && looksLikeProductURL(meta.finalUrl))
+  const shopifyProduct = (!parsedRecipe && type !== "place" && !music && !video && looksLikeProductURL(meta.finalUrl))
     ? await fetchShopifyProduct(meta.finalUrl, meta.currency).catch(() => null)
     : null;
 
@@ -963,6 +1023,15 @@ async function extractLive(cardId: string, card: any): Promise<void> {
     finalTitle = (prod.title as string) || finalTitle;
     finalDescription = (prod.description as string | null) ?? finalDescription;
     extracted = prod;
+  } else if (video) {
+    // A YouTube video card.
+    finalType = "link";
+    finalTitle = (video.title as string) || finalTitle;
+    if (video.thumbnail_url) {
+      thumb = (await cacheRemoteImage(video.thumbnail_url as string)) ?? (video.thumbnail_url as string) ?? thumb;
+      video.thumbnail_url = thumb;
+    }
+    extracted = video;
   } else {
     // Social captions (TikTok/IG) arrive as a long title → show a clean bold
     // headline and move the full caption into the body, not the title.
