@@ -76,6 +76,7 @@ export const serialize = {
     emoji: r.emoji,
     cover_card_id: r.cover_card_id,
     kind: r.kind,
+    private: r.private ?? false,
     background: r.background ?? null,
     public_slug: r.public_slug ?? null,
     created_at: r.created_at,

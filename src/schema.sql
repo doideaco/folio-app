@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS boards (
   emoji         text,
   cover_card_id uuid,
   kind          text NOT NULL DEFAULT 'solo' CHECK (kind IN ('solo','shared')),
+  private       boolean NOT NULL DEFAULT false,   -- hidden from MCP / AI-tool access
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
@@ -66,6 +67,22 @@ ALTER TABLE cards ADD COLUMN IF NOT EXISTS ref text;
 CREATE INDEX IF NOT EXISTS cards_owner_ref_idx ON cards (added_by, ref);
 -- Opt-in public read-only page slug for a board (null = private).
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS public_slug text;
+-- Boards the user has marked private (e.g. secret/Face-ID boards): excluded from
+-- MCP so AI tools never see them.
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS private boolean NOT NULL DEFAULT false;
+
+-- Personal access tokens for the per-user MCP endpoint. The raw token is shown
+-- once and only its SHA-256 hash is stored. `scope` gates write tools.
+CREATE TABLE IF NOT EXISTS mcp_tokens (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash   text NOT NULL UNIQUE,
+  label        text,
+  scope        text NOT NULL DEFAULT 'read' CHECK (scope IN ('read','read_write')),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  last_used_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS mcp_tokens_user_idx ON mcp_tokens (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS boards_public_slug_idx ON boards (public_slug);
 
 -- Append-only log of the emails that contributed to a reconciled record. The
