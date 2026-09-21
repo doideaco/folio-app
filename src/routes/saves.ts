@@ -18,6 +18,7 @@ const schema = z.object({
   note: z.string().optional(),
   category: z.string().max(40).optional(),
   image_url: z.string().url().optional(), // uploaded screenshot/image
+  raw_text: z.string().max(20000).optional(), // on-device OCR text (e.g. a screenshot)
 });
 
 function sourceKindFrom(url: string | undefined): string | null {
@@ -53,8 +54,8 @@ export async function savesRoutes(app: FastifyInstance) {
     // theirs from extraction.
     const title = isImage ? "Screenshot" : null;
     let card = await one<any>(
-      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted, thumb_url, title)
-       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
+      `INSERT INTO cards (id, board_id, added_by, source_url, source_kind, type, status, user_note, extracted, thumb_url, title, raw_text)
+       VALUES (COALESCE($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12)
        ON CONFLICT (id) DO NOTHING
        RETURNING *`,
       [
@@ -69,6 +70,7 @@ export async function savesRoutes(app: FastifyInstance) {
         seededExtracted,
         body.image_url ?? null,
         title,
+        body.raw_text ?? null,
       ]
     );
 
