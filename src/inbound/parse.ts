@@ -41,11 +41,19 @@ export interface ParsedInbound {
   providerDomain?: string | null;
 }
 
+// Everything forwarded by email lands in one hidden "Inbox" bucket. It's never
+// shown as a board tile in the app — the client surfaces it in the Inbox triage
+// view, and the smart Agenda / Trips lenses derive travel & events from the
+// cards' record data (kind + date), so we no longer spawn duplicate
+// Trips/Events/Orders boards. The category keys are kept (call sites reference
+// them) but all resolve to the same board; the rich `.record` extraction below
+// is unchanged, so nothing about how items are recognised is lost.
+const INBOX_BOARD = { boardName: "Inbox", boardEmoji: "📥" } as const;
 const BOARD = {
-  trips: { boardName: "Trips", boardEmoji: "✈️" },
-  events: { boardName: "Events", boardEmoji: "🎫" },
-  orders: { boardName: "Orders", boardEmoji: "📦" },
-  inbox: { boardName: "Inbox", boardEmoji: "📥" },
+  trips: INBOX_BOARD,
+  events: INBOX_BOARD,
+  orders: INBOX_BOARD,
+  inbox: INBOX_BOARD,
 } as const;
 
 /** A labelled detail row on a `.record` (mirrors Swift `RecordField`). */

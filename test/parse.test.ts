@@ -50,7 +50,7 @@ test("BA changed e-ticket → flight ZXRQ9T", () => {
   const p = parseFixture("ba-changed-zxrq9t.txt");
   const r = record(p);
   assert.equal(r.record_kind, "flight");
-  assert.equal(r.board_kind ?? p.boardName, "Trips");
+  assert.equal(r.board_kind ?? p.boardName, "Inbox");
   assert.equal(field(r, "Booking ref"), "ZXRQ9T");
   assert.match(field(r, "Flight") ?? field(r, "Flights") ?? "", /BA\d{3,4}/);
   assert.ok(r.date?.startsWith("2026-02-21"), `date was ${r.date}`);
@@ -148,7 +148,7 @@ test("Flatspot order → order F1020224", () => {
   const p = parseFixture("flatspot-f1020224.txt");
   const r = record(p);
   assert.equal(r.record_kind, "order");
-  assert.equal(p.boardName, "Orders");
+  assert.equal(p.boardName, "Inbox");
   assert.equal(field(r, "Order #"), "F1020224");
   assert.equal(r.amount, "£67.00");
   assert.ok(r.date?.startsWith("2026-09-08"), `date was ${r.date}`);
@@ -244,7 +244,7 @@ test("Ticketmaster concert → event record (HAIM)", () => {
   const p = parseFixture("ticketmaster-haim.txt");
   const r = record(p);
   assert.equal(r.record_kind, "event");
-  assert.equal(p.boardName, "Events");
+  assert.equal(p.boardName, "Inbox");
   assert.equal(r.provider, "Ticketmaster");
   assert.match(r.title, /HAIM/);
   assert.equal(field(r, "Order #"), "8-13232/UK1");
@@ -257,7 +257,7 @@ test("Eurostar → train record (Y6FRGP)", () => {
   const p = parseFixture("eurostar-y6frgp.txt");
   const r = record(p);
   assert.equal(r.record_kind, "trip");
-  assert.equal(p.boardName, "Trips");
+  assert.equal(p.boardName, "Inbox");
   assert.equal(r.provider, "Eurostar");
   assert.equal(field(r, "Booking ref"), "Y6FRGP");
   assert.match(field(r, "Route") ?? "", /Paris.*→.*London/);
@@ -381,7 +381,7 @@ test("JustPark HTML-only email → parking record (not a bare code)", () => {
   const p = parseJustPark();
   const r = record(p);
   assert.equal(r.record_kind, "parking");
-  assert.equal(p.boardName, "Trips");
+  assert.equal(p.boardName, "Inbox");
   assert.match(r.title, /Southwark/);              // location, not "#112082940"
   assert.equal(field(r, "Booking ref"), "#112082940");
   assert.equal(field(r, "Vehicle"), "AB12CDE");    // plate normalised (space stripped)
