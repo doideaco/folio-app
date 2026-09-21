@@ -122,6 +122,7 @@ export async function boardsRoutes(app: FastifyInstance) {
         name: z.string().min(1).max(80).optional(),
         emoji: z.string().max(8).nullable().optional(),
         background: z.string().max(1000).nullable().optional(), // "gradient:x" or "photo:<url>"
+        private: z.boolean().optional(), // hide from MCP / AI-tool access
       })
       .parse(req.body ?? {});
 
@@ -130,6 +131,7 @@ export async function boardsRoutes(app: FastifyInstance) {
     if (patch.name !== undefined) { vals.push(patch.name); sets.push(`name = $${vals.length}`); }
     if (patch.emoji !== undefined) { vals.push(patch.emoji); sets.push(`emoji = $${vals.length}`); }
     if (patch.background !== undefined) { vals.push(patch.background || null); sets.push(`background = $${vals.length}`); }
+    if (patch.private !== undefined) { vals.push(patch.private); sets.push(`private = $${vals.length}`); }
     if (sets.length === 0) throw notFound("nothing to update");
     sets.push("updated_at = now()");
 
