@@ -12,6 +12,7 @@ import { linksRoutes } from "./routes/links.js";
 import { devicesRoutes } from "./routes/devices.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { mcpRoutes } from "./routes/mcp.js";
+import { adminRoutes } from "./routes/admin.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
@@ -45,6 +46,7 @@ export function buildApp(): FastifyInstance {
   app.register(devicesRoutes);
   app.register(inboundRoutes);
   app.register(mcpRoutes);
+  app.register(adminRoutes);
 
   return app;
 }

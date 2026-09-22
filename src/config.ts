@@ -24,6 +24,8 @@ const schema = z.object({
   // secret the Cloudflare email Worker presents. Inbound is disabled until set.
   INBOUND_DOMAIN: z.string().default("folioinbox.me"),
   INBOUND_SECRET: z.string().optional(),
+  // Password for the /admin metrics dashboard. Disabled unless set.
+  ADMIN_KEY: z.string().optional(),
 });
 
 export const config = schema.parse(process.env);
