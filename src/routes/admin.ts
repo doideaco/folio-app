@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
-import { one } from "../db.js";
+import { one, q } from "../db.js";
 import { config } from "../config.js";
+import { pushEnabled, probeToken } from "../push.js";
 
 // A tiny founder dashboard: totals, growth, and activity. Guarded by HTTP Basic
 // auth (any username; password = ADMIN_KEY, a Fly secret) so the key never sits
@@ -67,6 +68,49 @@ export async function adminRoutes(app: FastifyInstance) {
     `);
     return { row, types, users };
   }
+
+  // Push diagnostic: reports config + silently probes every stored device token
+  // against APNs, returning the real status so we can tell an env mismatch (400)
+  // from a bad key (403) from all-good (200). No banners; no token pruning.
+  app.get("/admin/push", async (req, reply) => {
+    if (!authorized(req, reply)) return reply;
+    const rows = await q<{ token: string; user_id: string; handle: string | null }>(`
+      SELECT dt.token, dt.user_id, u.handle
+      FROM device_tokens dt JOIN users u ON u.id = dt.user_id
+      ORDER BY dt.updated_at DESC
+    `);
+    const meaning: Record<number, string> = {
+      200: "OK — delivered to APNs",
+      400: "BadDeviceToken — usually APNS_ENV mismatch (TestFlight = production)",
+      403: "Auth failed — bad .p8 key / key id / team id",
+      410: "Unregistered — token no longer valid",
+      0: "Network / connection error",
+    };
+    const results = pushEnabled
+      ? await Promise.all(
+          rows.map(async (r) => {
+            const { status, reason } = await probeToken(r.token);
+            return {
+              user: r.handle ? "@" + r.handle : r.user_id,
+              token: "…" + r.token.slice(-8),
+              status,
+              reason: reason ?? meaning[status] ?? "unknown",
+            };
+          })
+        )
+      : [];
+    reply.type("application/json");
+    return {
+      pushEnabled,
+      apnsEnv: config.APNS_ENV,
+      bundle: config.APNS_BUNDLE_ID,
+      deviceTokenCount: rows.length,
+      results,
+      note: rows.length === 0
+        ? "No device tokens stored. Open the app on a device (and allow notifications) to register one, then re-run."
+        : undefined,
+    };
+  });
 
   app.get("/admin", async (req, reply) => {
     if (!authorized(req, reply)) return reply;

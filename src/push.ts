@@ -47,6 +47,38 @@ async function sendToToken(deviceToken: string, payload: object): Promise<number
   });
 }
 
+/** Diagnostic: send a *silent* background push (no banner) to a token and return
+ *  the raw APNs status — without pruning. 200 = ok, 400 = BadDeviceToken (usually
+ *  an APNS_ENV mismatch), 403 = bad key/team, 410 = unregistered. Never throws. */
+export async function probeToken(deviceToken: string): Promise<{ status: number; reason?: string }> {
+  const jwt = await providerToken();
+  return new Promise((resolve) => {
+    const client = http2.connect(apnsHost());
+    client.on("error", () => resolve({ status: 0, reason: "connect_error" }));
+    const req = client.request({
+      ":method": "POST",
+      ":path": `/3/device/${deviceToken}`,
+      authorization: `bearer ${jwt}`,
+      "apns-topic": config.APNS_BUNDLE_ID,
+      "apns-push-type": "background",
+      "apns-priority": "5",
+      "content-type": "application/json",
+    });
+    let status = 0;
+    let bodyText = "";
+    req.on("response", (h) => { status = Number(h[":status"]) || 0; });
+    req.on("data", (chunk) => { bodyText += chunk; });
+    req.on("end", () => {
+      client.close();
+      let reason: string | undefined;
+      try { reason = bodyText ? JSON.parse(bodyText).reason : undefined; } catch { /* ignore */ }
+      resolve({ status, reason });
+    });
+    req.on("error", () => { client.close(); resolve({ status: 0, reason: "request_error" }); });
+    req.end(JSON.stringify({ aps: { "content-available": 1 } }));
+  });
+}
+
 /** Push to all of one user's devices. Returns true if at least one delivered.
  *  Prunes stale tokens. Best-effort; never throws. */
 export async function notifyUser(
