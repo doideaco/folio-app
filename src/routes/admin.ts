@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { one, q } from "../db.js";
 import { config } from "../config.js";
-import { pushEnabled, probeToken } from "../push.js";
+import { pushEnabled, probeToken, notifyUser } from "../push.js";
 
 // A tiny founder dashboard: totals, growth, and activity. Guarded by HTTP Basic
 // auth (any username; password = ADMIN_KEY, a Fly secret) so the key never sits
@@ -110,6 +110,23 @@ export async function adminRoutes(app: FastifyInstance) {
         ? "No device tokens stored. Open the app on a device (and allow notifications) to register one, then re-run."
         : undefined,
     };
+  });
+
+  // Send a real (visible) test push to a user by handle — definitive proof that
+  // notifications land on the device. e.g. /admin/push/test?handle=alex
+  app.get("/admin/push/test", async (req, reply) => {
+    if (!authorized(req, reply)) return reply;
+    const handle = (req.query as { handle?: string }).handle;
+    if (!handle) { reply.code(400); return { error: "pass ?handle=" }; }
+    const user = await one<{ id: string }>("SELECT id FROM users WHERE handle = $1", [handle]);
+    if (!user) { reply.code(404); return { error: `no user @${handle}` }; }
+    const delivered = await notifyUser(
+      user.id,
+      "Folio",
+      "🎉 Push notifications are working.",
+      { test: "1" }
+    );
+    return { handle, delivered };
   });
 
   app.get("/admin", async (req, reply) => {
