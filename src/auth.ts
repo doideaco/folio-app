@@ -26,15 +26,23 @@ export async function verifySession(token: string): Promise<string> {
 
 const appleJWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 
-/** Verify an Apple identity token; returns the stable Apple `sub`. */
-export async function verifyAppleToken(identityToken: string): Promise<string> {
+/**
+ * Verify an Apple identity token; returns the stable Apple `sub` plus the
+ * `email` claim when present. Apple only includes email on the *first*
+ * authorization (and only if the user agrees to share it — it may be a private
+ * relay address), so email is best-effort and often absent on later sign-ins.
+ */
+export async function verifyAppleToken(
+  identityToken: string
+): Promise<{ sub: string; email?: string }> {
   try {
     const { payload } = await jwtVerify(identityToken, appleJWKS, {
       issuer: "https://appleid.apple.com",
       audience: config.APPLE_CLIENT_ID,
     });
     if (!payload.sub) throw new Error("no sub");
-    return payload.sub;
+    const email = typeof payload.email === "string" ? payload.email : undefined;
+    return { sub: payload.sub, email };
   } catch {
     throw unauthorized("invalid Apple identity token");
   }

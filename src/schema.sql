@@ -11,8 +11,11 @@ CREATE TABLE IF NOT EXISTS users (
   handle       text UNIQUE,
   display_name text,
   avatar_url   text,
+  email        text,   -- from the Apple token's first-authorization email claim (best-effort)
   created_at   timestamptz NOT NULL DEFAULT now()
 );
+-- Backfill for already-deployed databases.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
 
 CREATE TABLE IF NOT EXISTS boards (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),

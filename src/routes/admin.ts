@@ -21,10 +21,20 @@ export async function adminRoutes(app: FastifyInstance) {
         (SELECT count(*) FROM card_votes)                                        AS votes,
         (SELECT count(*) FROM mcp_tokens)                                        AS mcp_tokens
     `);
-    const types = await import("../db.js").then((m) =>
-      m.q<any>(`SELECT type, count(*)::int AS n FROM cards GROUP BY type ORDER BY n DESC`)
+    const { q } = await import("../db.js");
+    const types = await q<any>(
+      `SELECT type, count(*)::int AS n FROM cards GROUP BY type ORDER BY n DESC`
     );
-    return { row, types };
+    const users = await q<any>(`
+      SELECT u.id, u.handle, u.display_name, u.email, u.created_at,
+             (u.apple_sub LIKE 'dev:%') AS is_dev,
+             (SELECT count(*) FROM cards  c WHERE c.added_by = u.id)::int AS saves,
+             (SELECT count(*) FROM boards b WHERE b.owner_id = u.id)::int AS boards,
+             (SELECT max(c.created_at) FROM cards c WHERE c.added_by = u.id) AS last_active
+      FROM users u
+      ORDER BY u.created_at DESC
+    `);
+    return { row, types, users };
   }
 
   app.get("/admin", async (req, reply) => {
@@ -34,12 +44,29 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.type("text/plain").send(config.ADMIN_KEY ? "unauthorized" : "not found");
     }
 
-    const { row, types } = await metrics();
+    const { row, types, users } = await metrics();
     const n = (v: any) => Number(v ?? 0).toLocaleString("en-GB");
+    const esc = (s: any) =>
+      String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+    const date = (v: any) => (v ? new Date(v).toISOString().slice(0, 10) : "—");
     const card = (label: string, value: any, sub = "") =>
       `<div class="c"><div class="v">${n(value)}</div><div class="l">${label}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
     const typeRows = types
-      .map((t) => `<tr><td>${t.type}</td><td style="text-align:right">${n(t.n)}</td></tr>`)
+      .map((t) => `<tr><td>${esc(t.type)}</td><td style="text-align:right">${n(t.n)}</td></tr>`)
+      .join("");
+    const userRows = users
+      .map((u) => {
+        const who = esc(u.handle ? "@" + u.handle : u.display_name || "—");
+        const dev = u.is_dev ? ' <span class="tag">dev</span>' : "";
+        return `<tr>
+          <td>${who}${dev}</td>
+          <td>${u.email ? esc(u.email) : '<span class="muted">—</span>'}</td>
+          <td>${date(u.created_at)}</td>
+          <td style="text-align:right">${n(u.saves)}</td>
+          <td style="text-align:right">${n(u.boards)}</td>
+          <td>${date(u.last_active)}</td>
+        </tr>`;
+      })
       .join("");
 
     reply.type("text/html");
@@ -59,8 +86,14 @@ export async function adminRoutes(app: FastifyInstance) {
   .s { color: #34c759; font-size: 12px; margin-top: 4px; }
   .t { background:#fff; border-radius:14px; padding:8px 16px; margin-top:20px; max-width:340px; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,.15); }
-  tr:last-child td { border: 0; }
+  td, th { padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.15); text-align: left; }
+  .t tr:last-child td { border: 0; }
+  h2 { font-size: 15px; margin: 28px 0 8px; }
+  .users { background:#fff; border-radius:14px; padding:4px 16px; overflow-x:auto; }
+  @media (prefers-color-scheme: dark){ .users{ background:#1c1c1e } }
+  th { color:#8a8a8e; font-weight:600; font-size:12px; }
+  .muted { color:#c7c7cc; }
+  .tag { font-size:10px; background:rgba(128,128,128,.18); border-radius:5px; padding:1px 5px; vertical-align:middle; }
 </style></head><body>
   <h1>Folio</h1>
   <p class="sub">Live metrics · ${new Date().toUTCString()}</p>
@@ -73,6 +106,11 @@ export async function adminRoutes(app: FastifyInstance) {
     ${card("AI tokens", row.mcp_tokens)}
   </div>
   <div class="t"><table><tr><td><b>Saves by type</b></td><td></td></tr>${typeRows}</table></div>
+  <h2>Users · ${n(row.users)}</h2>
+  <div class="users"><table>
+    <tr><th>User</th><th>Email</th><th>Joined</th><th style="text-align:right">Saves</th><th style="text-align:right">Boards</th><th>Last active</th></tr>
+    ${userRows}
+  </table></div>
 </body></html>`;
   });
 }

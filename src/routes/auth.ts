@@ -16,10 +16,11 @@ export async function authRoutes(app: FastifyInstance) {
     const body = bodySchema.parse(req.body ?? {});
 
     let appleSub: string;
+    let appleEmail: string | undefined;
     if (body.dev_user && config.AUTH_DEV_BYPASS) {
       appleSub = `dev:${body.dev_user}`;
     } else if (body.identity_token) {
-      appleSub = await verifyAppleToken(body.identity_token);
+      ({ sub: appleSub, email: appleEmail } = await verifyAppleToken(body.identity_token));
     } else {
       throw badRequest("identity_token or dev_user required");
     }
@@ -28,8 +29,15 @@ export async function authRoutes(app: FastifyInstance) {
     let user = await one<any>("SELECT * FROM users WHERE apple_sub = $1", [appleSub]);
     if (!user) {
       user = await one<any>(
-        "INSERT INTO users (apple_sub) VALUES ($1) RETURNING *",
-        [appleSub]
+        "INSERT INTO users (apple_sub, email) VALUES ($1, $2) RETURNING *",
+        [appleSub, appleEmail ?? null]
+      );
+    } else if (appleEmail && !user.email) {
+      // Apple only sends email on first authorization — capture it if we didn't
+      // have it (e.g. the user existed before we started storing email).
+      user = await one<any>(
+        "UPDATE users SET email = $2 WHERE id = $1 RETURNING *",
+        [user.id, appleEmail]
       );
     }
 
