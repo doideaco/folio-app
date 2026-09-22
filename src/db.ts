@@ -138,6 +138,19 @@ export const serialize = {
     user_id: r.user_id,
     created_at: r.created_at,
   }),
+  dateVote: (r: any) => ({
+    id: r.id,
+    board_id: r.board_id,
+    user_id: r.user_id,
+    // pg returns a `date` as a JS Date at *local* midnight; re-anchor to that
+    // calendar day at UTC midnight and emit ISO8601 so the client's date decoder
+    // (same path as created_at) parses it and reads back the same day in UTC.
+    day: (r.day instanceof Date
+      ? new Date(Date.UTC(r.day.getFullYear(), r.day.getMonth(), r.day.getDate()))
+      : new Date(String(r.day).slice(0, 10) + "T00:00:00Z")
+    ).toISOString(),
+    created_at: r.created_at,
+  }),
   task: (r: any) => ({
     id: r.id,
     card_id: r.card_id,

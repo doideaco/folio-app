@@ -153,6 +153,17 @@ CREATE INDEX IF NOT EXISTS votes_card_idx ON card_votes (card_id);
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS decide_by timestamptz;
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS decided_card_id uuid;
 
+-- Per-user availability votes for a shared board's "when should we go?" date poll.
+CREATE TABLE IF NOT EXISTS board_date_votes (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  board_id   uuid NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  user_id    uuid NOT NULL REFERENCES users(id),
+  day        date NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (board_id, user_id, day)
+);
+CREATE INDEX IF NOT EXISTS date_votes_board_idx ON board_date_votes (board_id);
+
 -- Per-card checklist items (board-shared: anyone on the board can add/tick).
 CREATE TABLE IF NOT EXISTS card_tasks (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -265,6 +276,8 @@ BEGIN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   ELSIF v_entity = 'vote' THEN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
+  ELSIF v_entity = 'datevote' THEN
+    v_board := COALESCE(NEW.board_id, OLD.board_id);
   ELSIF v_entity = 'task' THEN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   END IF;
@@ -318,6 +331,11 @@ DROP TRIGGER IF EXISTS trg_vote_change ON card_votes;
 CREATE TRIGGER trg_vote_change
   AFTER INSERT OR UPDATE OR DELETE ON card_votes
   FOR EACH ROW EXECUTE FUNCTION log_change('vote');
+
+DROP TRIGGER IF EXISTS trg_datevote_change ON board_date_votes;
+CREATE TRIGGER trg_datevote_change
+  AFTER INSERT OR UPDATE OR DELETE ON board_date_votes
+  FOR EACH ROW EXECUTE FUNCTION log_change('datevote');
 
 DROP TRIGGER IF EXISTS trg_fave_change ON card_faves;
 CREATE TRIGGER trg_fave_change

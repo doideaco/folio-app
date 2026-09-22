@@ -245,4 +245,32 @@ export async function boardsRoutes(app: FastifyInstance) {
     reply.code(204);
     return null;
   });
+
+  // PUT /boards/:id/date-votes?day=YYYY-MM-DD — mark the caller available on a day
+  // for this board's "when should we go?" poll.
+  app.put("/boards/:id/date-votes", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const { day } = req.query as { day?: string };
+    if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw badRequest("day (YYYY-MM-DD) required");
+    if (!(await isMember(userId, id))) throw forbidden();
+    const row = await one<any>(
+      `INSERT INTO board_date_votes (board_id, user_id, day) VALUES ($1,$2,$3)
+       ON CONFLICT (board_id, user_id, day) DO UPDATE SET board_id = EXCLUDED.board_id
+       RETURNING *`,
+      [id, userId, day]
+    );
+    return serialize.dateVote(row);
+  });
+
+  // DELETE /boards/:id/date-votes?day=YYYY-MM-DD — withdraw availability for a day.
+  app.delete("/boards/:id/date-votes", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const { day } = req.query as { day?: string };
+    if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw badRequest("day (YYYY-MM-DD) required");
+    await q("DELETE FROM board_date_votes WHERE board_id = $1 AND user_id = $2 AND day = $3", [id, userId, day]);
+    reply.code(204);
+    return null;
+  });
 }
