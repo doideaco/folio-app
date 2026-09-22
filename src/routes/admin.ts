@@ -1,10 +1,41 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { one } from "../db.js";
 import { config } from "../config.js";
 
-// A tiny founder dashboard: totals, growth, and activity. Password-gated with
-// ?key=ADMIN_KEY (a Fly secret). Disabled entirely if ADMIN_KEY isn't set.
+// A tiny founder dashboard: totals, growth, and activity. Guarded by HTTP Basic
+// auth (any username; password = ADMIN_KEY, a Fly secret) so the key never sits
+// in the URL / browser history / access logs. Disabled entirely (404) if
+// ADMIN_KEY isn't set.
 export async function adminRoutes(app: FastifyInstance) {
+  // Constant-time password check against ADMIN_KEY. Returns true if authorized;
+  // otherwise writes the appropriate response (404 when disabled, 401 + a Basic
+  // challenge so the browser prompts) and returns false.
+  function authorized(req: FastifyRequest, reply: FastifyReply): boolean {
+    if (!config.ADMIN_KEY) {
+      reply.code(404).type("text/plain").send("not found");
+      return false;
+    }
+    const hdr = req.headers.authorization ?? "";
+    let pass = "";
+    if (hdr.startsWith("Basic ")) {
+      const decoded = Buffer.from(hdr.slice(6), "base64").toString("utf8");
+      pass = decoded.slice(decoded.indexOf(":") + 1); // ignore username
+    }
+    const a = Buffer.from(pass);
+    const b = Buffer.from(config.ADMIN_KEY);
+    const ok = a.length === b.length && timingSafeEqual(a, b);
+    if (!ok) {
+      reply
+        .code(401)
+        .header("WWW-Authenticate", 'Basic realm="Folio", charset="UTF-8"')
+        .type("text/plain")
+        .send("unauthorized");
+      return false;
+    }
+    return true;
+  }
+
   async function metrics() {
     const row = await one<any>(`
       SELECT
@@ -38,11 +69,7 @@ export async function adminRoutes(app: FastifyInstance) {
   }
 
   app.get("/admin", async (req, reply) => {
-    const key = (req.query as { key?: string }).key;
-    if (!config.ADMIN_KEY || key !== config.ADMIN_KEY) {
-      reply.code(config.ADMIN_KEY ? 401 : 404);
-      return reply.type("text/plain").send(config.ADMIN_KEY ? "unauthorized" : "not found");
-    }
+    if (!authorized(req, reply)) return reply;
 
     const { row, types, users } = await metrics();
     const n = (v: any) => Number(v ?? 0).toLocaleString("en-GB");
