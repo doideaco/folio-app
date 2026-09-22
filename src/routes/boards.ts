@@ -123,6 +123,8 @@ export async function boardsRoutes(app: FastifyInstance) {
         emoji: z.string().max(8).nullable().optional(),
         background: z.string().max(1000).nullable().optional(), // "gradient:x" or "photo:<url>"
         private: z.boolean().optional(), // hide from MCP / AI-tool access
+        decide_by: z.string().datetime().nullable().optional(), // start a vote deadline
+        decided_card_id: z.string().uuid().nullable().optional(), // record the winner
       })
       .parse(req.body ?? {});
 
@@ -132,11 +134,29 @@ export async function boardsRoutes(app: FastifyInstance) {
     if (patch.emoji !== undefined) { vals.push(patch.emoji); sets.push(`emoji = $${vals.length}`); }
     if (patch.background !== undefined) { vals.push(patch.background || null); sets.push(`background = $${vals.length}`); }
     if (patch.private !== undefined) { vals.push(patch.private); sets.push(`private = $${vals.length}`); }
+    if (patch.decide_by !== undefined) { vals.push(patch.decide_by); sets.push(`decide_by = $${vals.length}`); }
+    if (patch.decided_card_id !== undefined) {
+      vals.push(patch.decided_card_id);
+      sets.push(`decided_card_id = $${vals.length}`);
+      // Recording a winner ends the vote.
+      if (patch.decided_card_id) sets.push("decide_by = NULL");
+    }
     if (sets.length === 0) throw notFound("nothing to update");
     sets.push("updated_at = now()");
 
     const board = await one<any>(`UPDATE boards SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, vals);
     if (!board) throw notFound();
+
+    // Announce a winner to the rest of the board (best-effort).
+    if (patch.decided_card_id) {
+      void (async () => {
+        const card = await one<{ title: string | null }>("SELECT title FROM cards WHERE id = $1", [patch.decided_card_id!]);
+        await notifyBoard(board.id, userId, board.name, `🎉 The board picked ${card?.title ?? "a winner"}`, {
+          board_id: board.id,
+          card_id: patch.decided_card_id!,
+        });
+      })();
+    }
     return serialize.board(board);
   });
 

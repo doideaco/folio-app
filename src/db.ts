@@ -79,6 +79,8 @@ export const serialize = {
     private: r.private ?? false,
     background: r.background ?? null,
     public_slug: r.public_slug ?? null,
+    decide_by: r.decide_by ?? null,
+    decided_card_id: r.decided_card_id ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   }),
@@ -125,6 +127,12 @@ export const serialize = {
     updated_at: r.updated_at,
   }),
   fave: (r: any) => ({
+    id: r.id,
+    card_id: r.card_id,
+    user_id: r.user_id,
+    created_at: r.created_at,
+  }),
+  vote: (r: any) => ({
     id: r.id,
     card_id: r.card_id,
     user_id: r.user_id,

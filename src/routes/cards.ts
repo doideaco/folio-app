@@ -112,6 +112,31 @@ export async function cardsRoutes(app: FastifyInstance) {
     return null;
   });
 
+  // PUT /cards/:id/vote — "back it" for the caller (deciding on a shared board).
+  app.put("/cards/:id/vote", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const row = await one<any>(
+      `INSERT INTO card_votes (card_id, user_id) VALUES ($1,$2)
+       ON CONFLICT (card_id, user_id) DO UPDATE SET card_id = EXCLUDED.card_id
+       RETURNING *`,
+      [id, userId]
+    );
+    return serialize.vote(row);
+  });
+
+  // DELETE /cards/:id/vote — withdraw the caller's vote.
+  app.delete("/cards/:id/vote", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    await one("DELETE FROM card_votes WHERE card_id = $1 AND user_id = $2", [id, userId]);
+    reply.code(204);
+    return null;
+  });
+
   // POST /cards/:id/tasks — add a checklist item.
   app.post("/cards/:id/tasks", async (req, reply) => {
     const userId = await requireUserId(req);

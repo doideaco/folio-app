@@ -46,6 +46,8 @@ export async function syncRoutes(app: FastifyInstance) {
     const ratingDel = new Set<string>();
     const faveUp = new Set<string>();
     const faveDel = new Set<string>();
+    const voteUp = new Set<string>();
+    const voteDel = new Set<string>();
     const taskUp = new Set<string>();
     const taskDel = new Set<string>();
     const memberBoards = new Set<string>();
@@ -67,6 +69,9 @@ export async function syncRoutes(app: FastifyInstance) {
           break;
         case "fave":
           (del ? faveDel : faveUp).add(c.entity_id);
+          break;
+        case "vote":
+          (del ? voteDel : voteUp).add(c.entity_id);
           break;
         case "task":
           (del ? taskDel : taskUp).add(c.entity_id);
@@ -92,6 +97,9 @@ export async function syncRoutes(app: FastifyInstance) {
     const faves = faveUp.size
       ? (await q<any>("SELECT * FROM card_faves WHERE id = ANY($1::uuid[])", [[...faveUp]])).map(serialize.fave)
       : [];
+    const votes = voteUp.size
+      ? (await q<any>("SELECT * FROM card_votes WHERE id = ANY($1::uuid[])", [[...voteUp]])).map(serialize.vote)
+      : [];
     const tasks = taskUp.size
       ? (await q<any>("SELECT * FROM card_tasks WHERE id = ANY($1::uuid[])", [[...taskUp]])).map(serialize.task)
       : [];
@@ -107,6 +115,7 @@ export async function syncRoutes(app: FastifyInstance) {
     for (const c of comments) userIds.add(c.user_id);
     for (const r of ratings) userIds.add(r.user_id);
     for (const f of faves) userIds.add(f.user_id);
+    for (const v of votes) userIds.add(v.user_id);
     const users = userIds.size
       ? (await q<any>("SELECT * FROM users WHERE id = ANY($1::uuid[])", [[...userIds]])).map(serialize.user)
       : [];
@@ -119,6 +128,7 @@ export async function syncRoutes(app: FastifyInstance) {
       comments,
       ratings,
       faves,
+      votes,
       tasks,
       members,
       users,
@@ -127,6 +137,7 @@ export async function syncRoutes(app: FastifyInstance) {
         comments: [...commentDel],
         ratings: [...ratingDel],
         faves: [...faveDel],
+        votes: [...voteDel],
         tasks: [...taskDel],
         boards: [...boardDel],
       },
@@ -143,9 +154,10 @@ function emptyResponse(since: bigint) {
     comments: [],
     ratings: [],
     faves: [],
+    votes: [],
     tasks: [],
     members: [],
     users: [],
-    deleted: { cards: [], comments: [], ratings: [], faves: [], tasks: [], boards: [] },
+    deleted: { cards: [], comments: [], ratings: [], faves: [], votes: [], tasks: [], boards: [] },
   };
 }

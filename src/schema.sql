@@ -136,6 +136,20 @@ CREATE TABLE IF NOT EXISTS card_faves (
 );
 CREATE INDEX IF NOT EXISTS faves_card_idx ON card_faves (card_id);
 
+-- Per-user "back it" votes for deciding together on a shared board.
+CREATE TABLE IF NOT EXISTS card_votes (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  card_id    uuid NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  user_id    uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (card_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS votes_card_idx ON card_votes (card_id);
+
+-- A board's decision state: a voting deadline and the chosen winner.
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS decide_by timestamptz;
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS decided_card_id uuid;
+
 -- Per-card checklist items (board-shared: anyone on the board can add/tick).
 CREATE TABLE IF NOT EXISTS card_tasks (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -246,6 +260,8 @@ BEGIN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   ELSIF v_entity = 'fave' THEN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
+  ELSIF v_entity = 'vote' THEN
+    SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   ELSIF v_entity = 'task' THEN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   END IF;
@@ -294,6 +310,11 @@ DROP TRIGGER IF EXISTS trg_rating_change ON card_ratings;
 CREATE TRIGGER trg_rating_change
   AFTER INSERT OR UPDATE OR DELETE ON card_ratings
   FOR EACH ROW EXECUTE FUNCTION log_change('rating');
+
+DROP TRIGGER IF EXISTS trg_vote_change ON card_votes;
+CREATE TRIGGER trg_vote_change
+  AFTER INSERT OR UPDATE OR DELETE ON card_votes
+  FOR EACH ROW EXECUTE FUNCTION log_change('vote');
 
 DROP TRIGGER IF EXISTS trg_fave_change ON card_faves;
 CREATE TRIGGER trg_fave_change
