@@ -26,6 +26,9 @@ const schema = z.object({
   INBOUND_SECRET: z.string().optional(),
   // Password for the /admin metrics dashboard. Disabled unless set.
   ADMIN_KEY: z.string().optional(),
+  // App Store product URL. When set, invite / public pages show a Download
+  // button (the "shared with someone who doesn't have Folio" install funnel).
+  APP_STORE_URL: z.string().optional(),
 });
 
 export const config = schema.parse(process.env);
