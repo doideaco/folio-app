@@ -922,6 +922,55 @@ async function extractStub(cardId: string, card: any): Promise<void> {
 }
 
 /** Live pipeline: fetch OpenGraph metadata for any URL — title, image, domain. */
+/** Build a PageMeta from the app's on-device scrape of the *rendered* page
+ *  (carried in raw_text as a `__folioPage` JSON). Reuses the same JSON-LD/OG
+ *  parser by reconstructing a minimal HTML doc, then overlays the scrape's
+ *  explicit price/image/title. Returns null when there's no client page data. */
+function metaFromClientPage(rawText: string | null | undefined, url: string): PageMeta | null {
+  if (!rawText) return null;
+  let d: any;
+  try { d = JSON.parse(rawText); } catch { return null; }
+  if (!d || d.__folioPage == null) return null;
+
+  const esc = (s: any) => String(s ?? "").replace(/"/g, "&quot;");
+  const parts: string[] = [];
+  if (d.title) parts.push(`<title>${esc(d.title)}</title>`, `<meta property="og:title" content="${esc(d.title)}">`);
+  if (d.description) parts.push(`<meta property="og:description" content="${esc(d.description)}">`);
+  if (d.image) parts.push(`<meta property="og:image" content="${esc(d.image)}">`);
+  if (d.siteName) parts.push(`<meta property="og:site_name" content="${esc(d.siteName)}">`);
+  if (d.ogType) parts.push(`<meta property="og:type" content="${esc(d.ogType)}">`);
+  if (Array.isArray(d.jsonld)) for (const s of d.jsonld) parts.push(`<script type="application/ld+json">${s}</script>`);
+
+  const meta = extractPageMeta(parts.join("\n"), typeof d.url === "string" ? d.url : url);
+  // The JSON-LD parser only reads price from offers; the scrape may have found a
+  // price via meta/selectors — trust it, and a visible price ⇒ it's a product.
+  if (!meta.price && d.price) meta.price = formatPrice(String(d.price), d.currency);
+  if (!meta.currency && d.currency) meta.currency = String(d.currency);
+  if (d.price) meta.isProduct = true;
+  if (!meta.image && d.image) meta.image = absolutize(String(d.image), meta.finalUrl);
+  return meta;
+}
+
+/** Coalesce two metas, preferring `primary` field-by-field (empty ⇒ fall back).
+ *  The on-device scrape is primary — it saw the real rendered page. */
+function mergeMeta(primary: PageMeta, secondary: PageMeta): PageMeta {
+  const pick = <T,>(a: T | undefined, b: T | undefined) =>
+    (a !== undefined && a !== null && (a as unknown) !== "" ? a : b);
+  return {
+    finalUrl: primary.finalUrl || secondary.finalUrl,
+    title: tidyTitle(primary.title) ?? tidyTitle(secondary.title) ?? primary.title ?? secondary.title,
+    description: pick(primary.description, secondary.description),
+    image: pick(primary.image, secondary.image),
+    siteName: pick(primary.siteName, secondary.siteName),
+    price: pick(primary.price, secondary.price),
+    brand: pick(primary.brand, secondary.brand),
+    isProduct: primary.isProduct || secondary.isProduct,
+    currency: pick(primary.currency, secondary.currency),
+    available: primary.available ?? secondary.available,
+    compareAt: pick(primary.compareAt, secondary.compareAt),
+  };
+}
+
 async function extractLive(cardId: string, card: any): Promise<void> {
   await q(`UPDATE cards SET status='processing', updated_at=now() WHERE id = $1`, [cardId]);
 
@@ -957,23 +1006,30 @@ async function extractLive(cardId: string, card: any): Promise<void> {
     }
   }
 
-  let meta: PageMeta;
+  // The app may have scraped the rendered page on-device (Safari share) — the
+  // authoritative signal for JS-only / bot-blocked shops (e.g. Zara).
+  const clientMeta = metaFromClientPage(card.raw_text, card.source_url);
+
+  let fetched: PageMeta | null = null;
   try {
     // Instagram serves the poster + title in OG meta even when walled; if that
     // ever stops, fall back to the public /embed/captioned/ page. YouTube/TikTok
     // → oEmbed; everything else → OpenGraph scrape.
     if (isInstagram) {
-      meta = await fetchMetadata(card.source_url);
-      if (!meta.image) meta = (await fetchInstagramEmbed(card.source_url)) ?? meta;
+      fetched = await fetchMetadata(card.source_url);
+      if (!fetched.image) fetched = (await fetchInstagramEmbed(card.source_url)) ?? fetched;
     } else {
-      meta = (await fetchOEmbed(card.source_url)) ?? (await fetchMetadata(card.source_url));
+      fetched = (await fetchOEmbed(card.source_url)) ?? (await fetchMetadata(card.source_url));
     }
   } catch (err) {
-    // Transient fetch failure (offline/blocked) — retry with backoff rather than
-    // giving up. A failed card is still a card once retries are exhausted.
-    await scheduleRetryOrFail(cardId, String(err));
-    return;
+    // Transient fetch failure (offline/blocked). If the app already handed us the
+    // rendered page, use that; otherwise retry with backoff.
+    if (!clientMeta) { await scheduleRetryOrFail(cardId, String(err)); return; }
   }
+
+  // Client scrape wins field-by-field (it saw the real page); network fills gaps.
+  let meta: PageMeta = clientMeta && fetched ? mergeMeta(clientMeta, fetched)
+    : (clientMeta ?? fetched!);
 
   // Instagram's OG title is "@user on Instagram: \"caption\"" — split it into a
   // clean caption title + author handle.
