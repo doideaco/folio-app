@@ -943,11 +943,20 @@ function metaFromClientPage(rawText: string | null | undefined, url: string): Pa
 
   const meta = extractPageMeta(parts.join("\n"), typeof d.url === "string" ? d.url : url);
   // The JSON-LD parser only reads price from offers; the scrape may have found a
-  // price via meta/selectors — trust it, and a visible price ⇒ it's a product.
-  if (!meta.price && d.price) meta.price = formatPrice(String(d.price), d.currency);
+  // price via meta/selectors/visible text — trust it, and a visible price ⇒ it's
+  // a product. A scraped visible price may already carry its symbol (e.g.
+  // "£45.00"), so don't prefix it again.
+  if (!meta.price && d.price) {
+    const p = String(d.price);
+    meta.price = /[£$€¥]/.test(p) ? p : formatPrice(p, d.currency);
+  }
   if (!meta.currency && d.currency) meta.currency = String(d.currency);
   if (d.price) meta.isProduct = true;
   if (!meta.image && d.image) meta.image = absolutize(String(d.image), meta.finalUrl);
+  // Prefer the on-screen heading when the page's own title was empty/junk.
+  if ((!meta.title || tidyTitle(meta.title) === undefined) && typeof d.visibleTitle === "string") {
+    meta.title = d.visibleTitle;
+  }
   return meta;
 }
 
