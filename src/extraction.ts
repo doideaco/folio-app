@@ -292,6 +292,15 @@ export function shopifyJsonToProduct(
  *  returns GBP even when we fetch from a US server, unlike the page's JSON-LD
  *  `priceCurrency`, which Shopify localizes to the requester's region. Cached per
  *  origin (a shop's base currency doesn't change). */
+/// An ISO-2 country in each currency's home market, used to pin Shopify's
+/// presentment (via `?country=`) so product.js prices come back in the store's
+/// base currency rather than localized to our server's region.
+const currencyCountry: Record<string, string> = {
+  GBP: "GB", USD: "US", EUR: "IE", CAD: "CA", AUD: "AU", NZD: "NZ",
+  JPY: "JP", SEK: "SE", DKK: "DK", NOK: "NO", CHF: "CH", SGD: "SG",
+  HKD: "HK", INR: "IN", ZAR: "ZA", AED: "AE", PLN: "PL",
+};
+
 const shopCurrencyCache = new Map<string, string | null>();
 async function fetchShopCurrency(origin: string): Promise<string | null> {
   if (shopCurrencyCache.has(origin)) return shopCurrencyCache.get(origin)!;
@@ -328,9 +337,21 @@ export async function fetchShopifyProduct(
   } catch { return null; }
   const productUrl = `${origin}/products/${handle}`;
   try {
-    const res = await fetch(`${productUrl}.js`, {
+    // Resolve the store's BASE currency first so we can pin the price fetch to
+    // that market. Shopify localizes product.js prices to the requester's region
+    // (USD from a US-hosted server), which would pair a USD amount with the base
+    // (£) symbol — the "dollar number, £ sign" bug. Passing ?country=<base> makes
+    // product.js return base-currency amounts, so symbol and number agree.
+    const currency = (await fetchShopCurrency(origin)) ?? currencyHint;
+    const country = currency ? currencyCountry[currency] : undefined;
+    const jsURL = `${productUrl}.js${country ? `?country=${country}` : ""}`;
+    const res = await fetch(jsURL, {
       redirect: "follow",
-      headers: { "User-Agent": BROWSER_UA, Accept: "application/json" },
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "application/json",
+        ...(country ? { "Accept-Language": `${country === "GB" ? "en-GB" : "en"},en;q=0.8` } : {}),
+      },
       signal: AbortSignal.timeout(9000),
     });
     if (!res.ok) return null;
@@ -341,7 +362,6 @@ export async function fetchShopifyProduct(
     const text = await res.text();
     let data: any;
     try { data = JSON.parse(text); } catch { return null; }
-    const currency = (await fetchShopCurrency(origin)) ?? currencyHint;
     return shopifyJsonToProduct(data, origin, productUrl, currency);
   } catch { return null; }
 }
