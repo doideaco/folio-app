@@ -218,6 +218,22 @@ CREATE TABLE IF NOT EXISTS board_invites (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Directed invites: invite a specific Folio user to a board (vs the anonymous
+-- link above). Gives us the relationship + a device token, so we can push and
+-- re-remind the exact person until they accept.
+CREATE TABLE IF NOT EXISTS board_direct_invites (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  board_id    uuid NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  inviter_id  uuid NOT NULL REFERENCES users(id),
+  invitee_id  uuid NOT NULL REFERENCES users(id),
+  status      text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined')),
+  reminded_at timestamptz,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (board_id, invitee_id)
+);
+CREATE INDEX IF NOT EXISTS direct_invites_invitee_idx ON board_direct_invites (invitee_id, status);
+
 -- Bookkeeping for the extraction retry/backoff schedule.
 CREATE TABLE IF NOT EXISTS card_extraction_state (
   card_id       uuid PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE,
