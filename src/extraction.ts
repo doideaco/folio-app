@@ -46,6 +46,7 @@ function decodeEntities(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&#x27;/g, "'")
+    .replace(/&nbsp;/gi, " ")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&");
@@ -160,6 +161,31 @@ function parseJsonLd(html: string, base: string): Partial<PageMeta> {
   return out;
 }
 
+/** Normalise a candidate title: collapse whitespace (incl. non-breaking spaces,
+ *  e.g. Zara's placeholder `&nbsp;` title) and reject anything too short to be a
+ *  real title, so we fall through to the next signal instead of a blank card. */
+export function tidyTitle(s?: string): string | undefined {
+  if (!s) return undefined;
+  const t = s.replace(/[ ​]/g, " ").replace(/\s+/g, " ").trim();
+  return t.length >= 2 ? t : undefined;
+}
+
+/** Last-resort title from the URL's own slug — turns
+ *  `/folding-corduroy-chair-l48336073` into "Folding Corduroy Chair", so pages
+ *  with junk/empty metadata still get a readable name. */
+export function titleFromURL(url: string): string | undefined {
+  try {
+    const seg = new URL(url).pathname.split("/").filter(Boolean).pop();
+    if (!seg) return undefined;
+    let s = decodeURIComponent(seg).replace(/\.[a-z0-9]{1,5}$/i, "");
+    // Drop a trailing product-code token (e.g. "-l48336073", "-p12345").
+    s = s.replace(/[-_]?[a-z]?\d{5,}[a-z0-9]*$/i, "");
+    s = s.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+    if (s.length < 2 || /^\d+$/.test(s)) return undefined;
+    return s.split(" ").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  } catch { return undefined; }
+}
+
 /** Combine every metadata signal on a page into one PageMeta: OpenGraph first,
  *  then Twitter cards, then JSON-LD, then the <title>/description/favicon. */
 function extractPageMeta(html: string, finalUrl: string): PageMeta {
@@ -181,10 +207,11 @@ function extractPageMeta(html: string, finalUrl: string): PageMeta {
   return {
     finalUrl,
     title:
-      metaContent(html, "og:title") ??
-      metaContent(html, "twitter:title") ??
-      jsonld.title ??
-      titleTag ??
+      tidyTitle(metaContent(html, "og:title")) ??
+      tidyTitle(metaContent(html, "twitter:title")) ??
+      tidyTitle(jsonld.title) ??
+      tidyTitle(titleTag) ??
+      titleFromURL(finalUrl) ??
       (host || undefined),
     description:
       metaContent(html, "og:description") ??
