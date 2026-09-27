@@ -64,6 +64,8 @@ CREATE INDEX IF NOT EXISTS cards_board_idx ON cards (board_id);
 -- Backfill columns on already-deployed databases (CREATE above only covers fresh).
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS raw_text text;
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS event_at timestamptz;
+-- Board-shared shortlist flag: everyone on the board sees the same "contenders".
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS shortlisted boolean NOT NULL DEFAULT false;
 -- Reconciliation key (family:reference, e.g. "flight:ZXRQ9T"): later emails about
 -- the same booking update the same card. Null = not reconcilable.
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS ref text;

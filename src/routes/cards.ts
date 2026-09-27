@@ -42,6 +42,8 @@ const patchSchema = z.object({
   music: z.record(z.string(), z.any()).optional(),
   video: z.record(z.string(), z.any()).optional(),
   event_at: z.string().datetime().nullable().optional(),
+  // Board-shared shortlist flag.
+  shortlisted: z.boolean().optional(),
 });
 
 export async function cardsRoutes(app: FastifyInstance) {
@@ -324,6 +326,7 @@ export async function cardsRoutes(app: FastifyInstance) {
     }
     if (patch.event_at !== undefined) push("event_at", patch.event_at);
     else if (patch.clear_event_at) push("event_at", null);
+    if (patch.shortlisted !== undefined) push("shortlisted", patch.shortlisted);
 
     sets.push("updated_at = now()");
 

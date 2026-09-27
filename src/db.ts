@@ -109,6 +109,7 @@ export const serialize = {
     background: r.background ?? null,
     raw_text: r.raw_text ?? null,
     event_at: r.event_at ?? null,
+    shortlisted: r.shortlisted ?? false,
     created_at: r.created_at,
     updated_at: r.updated_at,
   }),
