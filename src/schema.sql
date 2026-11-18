@@ -154,6 +154,8 @@ CREATE INDEX IF NOT EXISTS votes_card_idx ON card_votes (card_id);
 -- A board's decision state: a voting deadline and the chosen winner.
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS decide_by timestamptz;
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS decided_card_id uuid;
+-- The deadline we last sent a "voting closes soon" reminder for (see voteReminders.ts).
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS decide_reminded_for timestamptz;
 
 -- Per-user availability votes for a shared board's "when should we go?" date poll.
 CREATE TABLE IF NOT EXISTS board_date_votes (
@@ -185,6 +187,9 @@ CREATE TABLE IF NOT EXISTS device_tokens (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS device_tokens_user_idx ON device_tokens (user_id);
+-- The device's IANA time zone (e.g. Europe/London), so scheduled pushes like
+-- the weekly digest land at a sensible local hour. Null until the app reports it.
+ALTER TABLE device_tokens ADD COLUMN IF NOT EXISTS time_zone text;
 
 -- One row per (user, week) once we've sent that user their weekly resurface
 -- digest — claimed before sending so a crash mid-sweep never double-fires.

@@ -2,6 +2,7 @@ import http2 from "node:http2";
 import { SignJWT, importPKCS8 } from "jose";
 import { config } from "./config.js";
 import { q } from "./db.js";
+import { createSaveBatcher } from "./pushBatch.js";
 
 // Push is a no-op until the APNs key trio (key id, team id, .p8) is configured.
 export const pushEnabled = Boolean(config.APNS_KEY_ID && config.APNS_TEAM_ID && config.APNS_KEY);
@@ -85,7 +86,8 @@ export async function notifyUser(
   userId: string,
   title: string,
   body: string,
-  extra: Record<string, string> = {}
+  extra: Record<string, string> = {},
+  options: { timeSensitive?: boolean } = {}
 ): Promise<boolean> {
   if (!pushEnabled) return false;
   try {
@@ -94,7 +96,16 @@ export async function notifyUser(
       [userId]
     );
     if (rows.length === 0) return false;
-    const payload = { aps: { alert: { title, body }, sound: "default" }, ...extra };
+    const payload = {
+      aps: {
+        alert: { title, body },
+        sound: "default",
+        "thread-id": userThread(extra),
+        // Time Sensitive can break through Focus — reserved for deadlines.
+        ...(options.timeSensitive ? { "interruption-level": "time-sensitive" } : {}),
+      },
+      ...extra,
+    };
     let delivered = false;
     await Promise.all(
       rows.map(async ({ token }) => {
@@ -130,7 +141,11 @@ export async function notifyBoard(
       [boardId, actorId]
     );
     if (rows.length === 0) return;
-    const payload = { aps: { alert: { title, body }, sound: "default" }, ...extra };
+    // One thread per board, so a board's notifications stack together.
+    const payload = {
+      aps: { alert: { title, body }, sound: "default", "thread-id": `board-${boardId}` },
+      ...extra,
+    };
     await Promise.all(
       rows.map(async ({ token }) => {
         const status = await sendToToken(token, payload);
@@ -143,3 +158,21 @@ export async function notifyBoard(
     console.error("[push] notifyBoard failed:", (err as Error).message);
   }
 }
+
+/** Groups personal notifications by kind (shopping alerts, invites, digest…). */
+export function userThread(extra: Record<string, string>): string {
+  switch (extra.type) {
+    case "price":
+    case "restock":
+      return "shopping";
+    case "invite":
+      return "invites";
+    case "digest":
+      return "digest";
+    default:
+      return extra.board_id ? `board-${extra.board_id}` : "folio";
+  }
+}
+
+/** Batches "@x added a save" pushes per board and person (see pushBatch.ts). */
+export const saveBatcher = createSaveBatcher({ notify: notifyBoard });

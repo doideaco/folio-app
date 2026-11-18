@@ -10,13 +10,33 @@ import { q } from "./db.js";
 import { notifyUser, pushEnabled } from "./push.js";
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
-const SEND_HOUR_UTC = 9;                  // Sunday ~9am (server/UTC time)
+const SEND_HOUR_LOCAL = 9;                // Sunday ~9am in the user's own time zone
 const MIN_TITLES = 2;                     // nothing worth a "revisit these" below this
 
-/** The Sunday that starts `d`'s week, as an ISO date (YYYY-MM-DD, UTC). */
-function weekStart(d: Date): string {
-  const sunday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - d.getUTCDay()));
-  return sunday.toISOString().slice(0, 10);
+/** The wall clock in `timeZone` at `now` — weekday (0 = Sunday), hour, and the
+ *  local calendar date. Unknown or missing zones fall back to UTC. */
+export function localClock(now: Date, timeZone: string | null | undefined): { weekday: number; hour: number; date: string } {
+  let zone = timeZone || "UTC";
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone, weekday: "short", hour: "2-digit", hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(now);
+  } catch {
+    zone = "UTC";
+    return localClock(now, zone);
+  }
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday"));
+  return { weekday, hour: Number(get("hour")), date: `${get("year")}-${get("month")}-${get("day")}` };
+}
+
+/** Whether it's digest time (Sunday, the send hour) in this zone; returns the
+ *  local Sunday's date — the week this digest belongs to — or null. */
+export function digestWeek(now: Date, timeZone: string | null | undefined): string | null {
+  const local = localClock(now, timeZone);
+  return local.weekday === 0 && local.hour === SEND_HOUR_LOCAL ? local.date : null;
 }
 
 /** Build the notification body from a user's recent save titles. */
@@ -28,24 +48,21 @@ function digestBody(titles: string[]): string {
 }
 
 /** Run one digest sweep for the given moment. Exported for testing. Returns the
- *  number of users actually pushed to. Safe to call repeatedly. */
+ *  number of users actually pushed to. Safe to call repeatedly: each user is
+ *  sent at most once per week, when it's Sunday morning where they are. */
 export async function runDigestSweep(now: Date): Promise<number> {
   if (!pushEnabled) return 0;
-  // Only fire during the 9am UTC hour on Sundays; other ticks are no-ops.
-  if (now.getUTCDay() !== 0 || now.getUTCHours() !== SEND_HOUR_UTC) return 0;
 
-  const week = weekStart(now);
-  // Candidates: anyone with a registered device who hasn't got this week's yet.
-  const candidates = await q<{ user_id: string }>(
-    `SELECT DISTINCT dt.user_id FROM device_tokens dt
-     WHERE NOT EXISTS (
-       SELECT 1 FROM push_digests pd WHERE pd.user_id = dt.user_id AND pd.week = $1
-     )`,
-    [week]
+  // Everyone with a registered device, with the zone of their latest device.
+  const users = await q<{ user_id: string; time_zone: string | null }>(
+    `SELECT DISTINCT ON (user_id) user_id, time_zone FROM device_tokens
+     ORDER BY user_id, updated_at DESC`
   );
 
   let sent = 0;
-  for (const { user_id } of candidates) {
+  for (const { user_id, time_zone } of users) {
+    const week = digestWeek(now, time_zone);
+    if (!week) continue;
     // Claim the slot first (idempotent). If we lose the race, skip.
     const claimed = await q(
       `INSERT INTO push_digests (user_id, week) VALUES ($1, $2)

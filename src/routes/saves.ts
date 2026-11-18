@@ -5,7 +5,7 @@ import { requireUserId } from "../auth.js";
 import { forbidden, badRequest } from "../errors.js";
 import { isMember } from "./boards.js";
 import { runExtraction } from "../extraction.js";
-import { notifyBoard } from "../push.js";
+import { saveBatcher } from "../push.js";
 
 const schema = z.object({
   id: z.string().uuid().optional(), // client-generated card id (idempotency key)
@@ -81,15 +81,21 @@ export async function savesRoutes(app: FastifyInstance) {
       return serialize.card(card);
     }
 
-    // Notify the rest of the board that a card was added (best-effort).
+    // Notify the rest of the board that a card was added (best-effort). Bursts
+    // are batched: the first save pushes now, the rest roll into one follow-up.
     void (async () => {
       const info = await one<{ board: string; handle: string | null }>(
         "SELECT b.name AS board, u.handle FROM boards b JOIN users u ON u.id = $2 WHERE b.id = $1",
         [card.board_id, userId]
       );
       if (info) {
-        await notifyBoard(card.board_id, userId, info.board, `@${info.handle ?? "someone"} added a save`, {
-          board_id: card.board_id,
+        saveBatcher.add({
+          boardId: card.board_id,
+          boardName: info.board,
+          actorId: userId,
+          handle: info.handle,
+          cardId: card.id,
+          cardTitle: card.title,
         });
       }
     })();
