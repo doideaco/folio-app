@@ -14,6 +14,7 @@ import { inboundRoutes } from "./routes/inbound.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { adminRoutes } from "./routes/admin.js";
 import { invitesRoutes } from "./routes/invites.js";
+import { renewedSessions, RENEWED_SESSION_HEADER } from "./auth.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
@@ -32,6 +33,14 @@ export function buildApp(): FastifyInstance {
     }
     app.log.error(error);
     return reply.code(500).send({ error: "internal_error" });
+  });
+
+  // Hand back a renewed session token when the request's one is getting old
+  // (see requireUserId), so active users never reach expiry.
+  app.addHook("onSend", async (req, reply, payload) => {
+    const renewed = renewedSessions.get(req);
+    if (renewed) reply.header(RENEWED_SESSION_HEADER, renewed);
+    return payload;
   });
 
   app.get("/healthz", async () => ({ ok: true }));
