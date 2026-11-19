@@ -96,6 +96,7 @@ export async function savesRoutes(app: FastifyInstance) {
           handle: info.handle,
           cardId: card.id,
           cardTitle: card.title,
+          imageURL: card.thumb_url,
         });
       }
     })();

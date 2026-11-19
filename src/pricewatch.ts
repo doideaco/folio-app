@@ -80,11 +80,12 @@ export async function runPriceSweep(now: Date): Promise<number> {
       void notifyUser(
         row.added_by, "Price drop",
         `${name} is now ${fresh.price}${product.price ? ` (was ${product.price})` : ""}`,
-        { type: "price", card_id: row.id }
+        { type: "price", card_id: row.id },
+        { kind: "shopping" }
       );
     } else if (restocked) {
       void notifyUser(row.added_by, "Back in stock", `${name} is available again`,
-        { type: "restock", card_id: row.id });
+        { type: "restock", card_id: row.id }, { kind: "shopping" });
     }
   }
   return changed;

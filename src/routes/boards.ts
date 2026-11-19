@@ -150,11 +150,13 @@ export async function boardsRoutes(app: FastifyInstance) {
     // Announce a winner to the rest of the board (best-effort).
     if (patch.decided_card_id) {
       void (async () => {
-        const card = await one<{ title: string | null }>("SELECT title FROM cards WHERE id = $1", [patch.decided_card_id!]);
+        const card = await one<{ title: string | null; thumb_url: string | null }>(
+          "SELECT title, thumb_url FROM cards WHERE id = $1", [patch.decided_card_id!]);
         await notifyBoard(board.id, userId, board.name, `🎉 The board picked ${card?.title ?? "a winner"}`, {
           board_id: board.id,
           card_id: patch.decided_card_id!,
-        });
+          ...(card?.thumb_url ? { image_url: card.thumb_url } : {}),
+        }, "decisions");
       })();
     }
     return serialize.board(board);
@@ -195,7 +197,7 @@ export async function boardsRoutes(app: FastifyInstance) {
       const u = await one<{ handle: string | null }>("SELECT handle FROM users WHERE id = $1", [userId]);
       await notifyBoard(board.id, userId, board.name, `@${u?.handle ?? "someone"} joined the board`, {
         board_id: board.id,
-      });
+      }, "saves");
     })();
     return serialize.board(board);
   });

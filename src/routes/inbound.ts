@@ -167,7 +167,7 @@ export async function inboundRoutes(app: FastifyInstance) {
            (after.date as string) ?? parsed.eventAt ?? null, rawText, existing.id]
         );
         const note = changes.length ? `Updated: ${changes[0]}` : `Updated: ${parsed.title.slice(0, 60)}`;
-        void notifyBoard(existing.board_id, userId, parsed.boardName, note, { board_id: existing.board_id });
+        void notifyBoard(existing.board_id, userId, parsed.boardName, note, { board_id: existing.board_id }, "saves");
         reply.code(200);
         return { ok: true, card_id: updated.id, board_id: existing.board_id, updated: true };
       }
@@ -215,7 +215,7 @@ export async function inboundRoutes(app: FastifyInstance) {
     }
 
     // Let shared-board members know (best-effort; no-op on solo boards).
-    void notifyBoard(boardId, userId, parsed.boardName, `New save: ${parsed.title.slice(0, 80)}`, { board_id: boardId });
+    void notifyBoard(boardId, userId, parsed.boardName, `New save: ${parsed.title.slice(0, 80)}`, { board_id: boardId }, "saves");
 
     reply.code(201);
     return { ok: true, card_id: card.id, board_id: boardId };

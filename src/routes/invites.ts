@@ -144,7 +144,7 @@ export async function invitesRoutes(app: FastifyInstance) {
       const u = await one<{ handle: string | null }>("SELECT handle FROM users WHERE id = $1", [userId]);
       await notifyBoard(board.id, userId, board.name, `@${u?.handle ?? "someone"} joined the board`, {
         board_id: board.id,
-      });
+      }, "saves");
     })();
     const { serialize } = await import("../db.js");
     return serialize.board(board);

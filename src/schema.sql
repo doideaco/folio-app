@@ -191,6 +191,21 @@ CREATE INDEX IF NOT EXISTS device_tokens_user_idx ON device_tokens (user_id);
 -- the weekly digest land at a sensible local hour. Null until the app reports it.
 ALTER TABLE device_tokens ADD COLUMN IF NOT EXISTS time_zone text;
 
+-- Notification kinds a user has switched off (push.ts NOTIFICATION_KINDS).
+CREATE TABLE IF NOT EXISTS notification_prefs (
+  user_id    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  disabled   text[] NOT NULL DEFAULT '{}',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Boards a user has muted: no pushes about them.
+CREATE TABLE IF NOT EXISTS board_mutes (
+  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  board_id   uuid NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, board_id)
+);
+
 -- One row per (user, week) once we've sent that user their weekly resurface
 -- digest — claimed before sending so a crash mid-sweep never double-fires.
 CREATE TABLE IF NOT EXISTS push_digests (

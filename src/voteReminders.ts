@@ -59,7 +59,7 @@ export async function runVoteReminderSweep(
         board.name,
         `Voting closes ${when} — you haven’t voted yet. Back your favourite.`,
         { type: "vote", board_id: board.id },
-        { timeSensitive: true }
+        { timeSensitive: true, kind: "decisions" }
       );
       if (ok) reminded++;
     }

@@ -84,7 +84,8 @@ export async function runDigestSweep(now: Date): Promise<number> {
       user_id,
       "Revisit your saves",
       `Revisit these: ${digestBody(titles)}`,
-      { type: "digest" }
+      { type: "digest" },
+      { kind: "digest" }
     );
     if (ok) sent++;
   }

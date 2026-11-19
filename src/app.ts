@@ -10,6 +10,7 @@ import { uploadsRoutes } from "./routes/uploads.js";
 import { previewRoutes } from "./routes/preview.js";
 import { linksRoutes } from "./routes/links.js";
 import { devicesRoutes } from "./routes/devices.js";
+import { notificationsRoutes } from "./routes/notifications.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -54,6 +55,7 @@ export function buildApp(): FastifyInstance {
   app.register(previewRoutes);
   app.register(linksRoutes);
   app.register(devicesRoutes);
+  app.register(notificationsRoutes);
   app.register(inboundRoutes);
   app.register(mcpRoutes);
   app.register(adminRoutes);

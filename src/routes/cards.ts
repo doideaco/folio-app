@@ -5,6 +5,7 @@ import { requireUserId } from "../auth.js";
 import { forbidden, notFound } from "../errors.js";
 import { isMember } from "./boards.js";
 import { runExtraction } from "../extraction.js";
+import { commentBatcher, voteBatcher } from "../push.js";
 
 async function cardBoardId(cardId: string): Promise<string | null> {
   const row = await one<{ board_id: string }>("SELECT board_id FROM cards WHERE id = $1", [cardId]);
@@ -59,6 +60,21 @@ export async function cardsRoutes(app: FastifyInstance) {
       `INSERT INTO card_comments (card_id, user_id, body) VALUES ($1,$2,$3) RETURNING *`,
       [id, userId, body]
     );
+    // Tell the rest of the board (best-effort; a burst on one card rolls up).
+    void (async () => {
+      const info = await one<{ board: string; handle: string | null; title: string | null; thumb: string | null }>(
+        `SELECT b.name AS board, u.handle, c.title, c.thumb_url AS thumb
+         FROM cards c JOIN boards b ON b.id = c.board_id JOIN users u ON u.id = $2
+         WHERE c.id = $1`,
+        [id, userId]
+      );
+      if (info) {
+        commentBatcher.add({
+          boardId, boardName: info.board, actorId: userId, handle: info.handle,
+          cardId: id, cardTitle: info.title, text: body, imageURL: info.thumb,
+        });
+      }
+    })();
     reply.code(201);
     return serialize.comment(comment);
   });
@@ -124,9 +140,26 @@ export async function cardsRoutes(app: FastifyInstance) {
     const row = await one<any>(
       `INSERT INTO card_votes (card_id, user_id) VALUES ($1,$2)
        ON CONFLICT (card_id, user_id) DO UPDATE SET card_id = EXCLUDED.card_id
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS inserted`,
       [id, userId]
     );
+    // A new vote (not a repeat) tells the person who saved the card.
+    if (row?.inserted) {
+      void (async () => {
+        const info = await one<{ board: string; handle: string | null; saver: string; title: string | null; thumb: string | null }>(
+          `SELECT b.name AS board, u.handle, c.added_by AS saver, c.title, c.thumb_url AS thumb
+           FROM cards c JOIN boards b ON b.id = c.board_id JOIN users u ON u.id = $2
+           WHERE c.id = $1`,
+          [id, userId]
+        );
+        if (info && info.saver !== userId) {
+          voteBatcher.add({
+            boardId, boardName: info.board, voterId: userId, handle: info.handle,
+            saverId: info.saver, cardId: id, cardTitle: info.title, imageURL: info.thumb,
+          });
+        }
+      })();
+    }
     return serialize.vote(row);
   });
 
