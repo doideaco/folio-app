@@ -179,3 +179,42 @@ export function createVoteBatcher(options: {
     },
   });
 }
+
+export interface ReactionEvent {
+  boardId: string;
+  boardName: string;
+  reactorId: string;
+  handle: string | null;
+  /** Who saved the card — the one person told about the reaction. */
+  saverId: string;
+  cardId: string;
+  cardTitle: string | null;
+  emoji: string;
+  imageURL?: string | null;
+}
+
+/** "@jo ❤️ your save “Tartine”" — sent only to the card's saver. */
+export function createReactionBatcher(options: {
+  notify: UserNotifier;
+  windowMs?: number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+}) {
+  return createBatcher<ReactionEvent>({
+    windowMs: options.windowMs,
+    setTimer: options.setTimer,
+    key: (e) => `${e.boardId}:${e.reactorId}:${e.saverId}`,
+    first: (e) => {
+      const body = e.cardTitle?.trim()
+        ? `${who(e.handle)} ${e.emoji} your save “${shortTitle(e.cardTitle, 60)}”`
+        : `${who(e.handle)} ${e.emoji} one of your saves`;
+      const extra: Record<string, string> = { type: "reaction", board_id: e.boardId, card_id: e.cardId };
+      if (e.imageURL) extra.image_url = e.imageURL;
+      void options.notify(e.saverId, e.boardName, body, extra);
+    },
+    rollup: (count, last) => {
+      void options.notify(last.saverId, last.boardName,
+        `${who(last.handle)} reacted to ${count} more of your saves`,
+        { type: "reaction", board_id: last.boardId });
+    },
+  });
+}

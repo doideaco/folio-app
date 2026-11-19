@@ -48,6 +48,8 @@ export async function syncRoutes(app: FastifyInstance) {
     const faveDel = new Set<string>();
     const voteUp = new Set<string>();
     const voteDel = new Set<string>();
+    const reactionUp = new Set<string>();
+    const reactionDel = new Set<string>();
     const dateVoteUp = new Set<string>();
     const dateVoteDel = new Set<string>();
     const taskUp = new Set<string>();
@@ -74,6 +76,9 @@ export async function syncRoutes(app: FastifyInstance) {
           break;
         case "vote":
           (del ? voteDel : voteUp).add(c.entity_id);
+          break;
+        case "reaction":
+          (del ? reactionDel : reactionUp).add(c.entity_id);
           break;
         case "datevote":
           (del ? dateVoteDel : dateVoteUp).add(c.entity_id);
@@ -105,6 +110,9 @@ export async function syncRoutes(app: FastifyInstance) {
     const votes = voteUp.size
       ? (await q<any>("SELECT * FROM card_votes WHERE id = ANY($1::uuid[])", [[...voteUp]])).map(serialize.vote)
       : [];
+    const reactions = reactionUp.size
+      ? (await q<any>("SELECT * FROM card_reactions WHERE id = ANY($1::uuid[])", [[...reactionUp]])).map(serialize.reaction)
+      : [];
     const dateVotes = dateVoteUp.size
       ? (await q<any>("SELECT * FROM board_date_votes WHERE id = ANY($1::uuid[])", [[...dateVoteUp]])).map(serialize.dateVote)
       : [];
@@ -124,6 +132,7 @@ export async function syncRoutes(app: FastifyInstance) {
     for (const r of ratings) userIds.add(r.user_id);
     for (const f of faves) userIds.add(f.user_id);
     for (const v of votes) userIds.add(v.user_id);
+    for (const r of reactions) userIds.add(r.user_id);
     for (const dv of dateVotes) userIds.add(dv.user_id);
     const users = userIds.size
       ? (await q<any>("SELECT * FROM users WHERE id = ANY($1::uuid[])", [[...userIds]])).map(serialize.user)
@@ -138,6 +147,7 @@ export async function syncRoutes(app: FastifyInstance) {
       ratings,
       faves,
       votes,
+      reactions,
       date_votes: dateVotes,
       tasks,
       members,
@@ -148,6 +158,7 @@ export async function syncRoutes(app: FastifyInstance) {
         ratings: [...ratingDel],
         faves: [...faveDel],
         votes: [...voteDel],
+        reactions: [...reactionDel],
         date_votes: [...dateVoteDel],
         tasks: [...taskDel],
         boards: [...boardDel],
@@ -166,10 +177,11 @@ function emptyResponse(since: bigint) {
     ratings: [],
     faves: [],
     votes: [],
+    reactions: [],
     date_votes: [],
     tasks: [],
     members: [],
     users: [],
-    deleted: { cards: [], comments: [], ratings: [], faves: [], votes: [], date_votes: [], tasks: [], boards: [] },
+    deleted: { cards: [], comments: [], ratings: [], faves: [], votes: [], reactions: [], date_votes: [], tasks: [], boards: [] },
   };
 }

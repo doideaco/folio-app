@@ -139,6 +139,13 @@ export const serialize = {
     user_id: r.user_id,
     created_at: r.created_at,
   }),
+  reaction: (r: any) => ({
+    id: r.id,
+    card_id: r.card_id,
+    user_id: r.user_id,
+    emoji: r.emoji,
+    created_at: r.created_at,
+  }),
   dateVote: (r: any) => ({
     id: r.id,
     board_id: r.board_id,

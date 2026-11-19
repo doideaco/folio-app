@@ -2,7 +2,7 @@ import http2 from "node:http2";
 import { SignJWT, importPKCS8 } from "jose";
 import { config } from "./config.js";
 import { q } from "./db.js";
-import { createCommentBatcher, createSaveBatcher, createVoteBatcher } from "./pushBatch.js";
+import { createCommentBatcher, createReactionBatcher, createSaveBatcher, createVoteBatcher } from "./pushBatch.js";
 
 // Push is a no-op until the APNs key trio (key id, team id, .p8) is configured.
 export const pushEnabled = Boolean(config.APNS_KEY_ID && config.APNS_TEAM_ID && config.APNS_KEY);
@@ -83,7 +83,7 @@ export async function probeToken(deviceToken: string): Promise<{ status: number;
 /** What a notification is about. Each kind can be switched off in the app's
  *  Settings; board-related kinds also respect a muted board. Invites and
  *  diagnostics pass no kind and always send. */
-export const NOTIFICATION_KINDS = ["saves", "comments", "decisions", "shopping", "digest"] as const;
+export const NOTIFICATION_KINDS = ["saves", "comments", "decisions", "reactions", "shopping", "digest"] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 function payloadFor(
@@ -209,6 +209,7 @@ export function userThread(extra: Record<string, string>): string {
     case "digest":
       return "digest";
     case "vote":
+    case "reaction":
       return extra.board_id ? `board-${extra.board_id}` : "folio";
     default:
       return extra.board_id ? `board-${extra.board_id}` : "folio";
@@ -228,4 +229,9 @@ export const commentBatcher = createCommentBatcher({
 /** Batches "@x backed your save" pushes to the card's saver. */
 export const voteBatcher = createVoteBatcher({
   notify: (userId, title, body, extra) => notifyUser(userId, title, body, extra, { kind: "decisions" }),
+});
+
+/** Batches "@x ❤️ your save" pushes to the card's saver. */
+export const reactionBatcher = createReactionBatcher({
+  notify: (userId, title, body, extra) => notifyUser(userId, title, body, extra, { kind: "reactions" }),
 });

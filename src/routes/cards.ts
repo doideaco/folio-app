@@ -5,7 +5,10 @@ import { requireUserId } from "../auth.js";
 import { forbidden, notFound } from "../errors.js";
 import { isMember } from "./boards.js";
 import { runExtraction } from "../extraction.js";
-import { commentBatcher, voteBatcher } from "../push.js";
+import { commentBatcher, reactionBatcher, voteBatcher } from "../push.js";
+
+/** The reactions people can leave on a save. */
+export const REACTIONS = ["❤️", "😂", "🔥", "😮", "👀"] as const;
 
 async function cardBoardId(cardId: string): Promise<string | null> {
   const row = await one<{ board_id: string }>("SELECT board_id FROM cards WHERE id = $1", [cardId]);
@@ -161,6 +164,49 @@ export async function cardsRoutes(app: FastifyInstance) {
       })();
     }
     return serialize.vote(row);
+  });
+
+  // PUT /cards/:id/reaction — set (or change) the caller's emoji reaction.
+  app.put("/cards/:id/reaction", async (req) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    const boardId = await cardBoardId(id);
+    if (!boardId) throw notFound();
+    if (!(await isMember(userId, boardId))) throw forbidden();
+    const { emoji } = z.object({ emoji: z.enum(REACTIONS) }).parse(req.body ?? {});
+    const row = await one<any>(
+      `INSERT INTO card_reactions (card_id, user_id, emoji) VALUES ($1,$2,$3)
+       ON CONFLICT (card_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, updated_at = now()
+       RETURNING *, (xmax = 0) AS inserted`,
+      [id, userId, emoji]
+    );
+    // A first reaction (not a change of emoji) tells the person who saved it.
+    if (row?.inserted) {
+      void (async () => {
+        const info = await one<{ board: string; handle: string | null; saver: string; title: string | null; thumb: string | null }>(
+          `SELECT b.name AS board, u.handle, c.added_by AS saver, c.title, c.thumb_url AS thumb
+           FROM cards c JOIN boards b ON b.id = c.board_id JOIN users u ON u.id = $2
+           WHERE c.id = $1`,
+          [id, userId]
+        );
+        if (info && info.saver !== userId) {
+          reactionBatcher.add({
+            boardId, boardName: info.board, reactorId: userId, handle: info.handle, saverId: info.saver,
+            cardId: id, cardTitle: info.title, emoji, imageURL: info.thumb,
+          });
+        }
+      })();
+    }
+    return serialize.reaction(row);
+  });
+
+  // DELETE /cards/:id/reaction — remove the caller's reaction.
+  app.delete("/cards/:id/reaction", async (req, reply) => {
+    const userId = await requireUserId(req);
+    const { id } = req.params as { id: string };
+    await one("DELETE FROM card_reactions WHERE card_id = $1 AND user_id = $2", [id, userId]);
+    reply.code(204);
+    return null;
   });
 
   // DELETE /cards/:id/vote — withdraw the caller's vote.

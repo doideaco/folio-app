@@ -151,6 +151,19 @@ CREATE TABLE IF NOT EXISTS card_votes (
 );
 CREATE INDEX IF NOT EXISTS votes_card_idx ON card_votes (card_id);
 
+-- Per-user emoji reactions on a save: one per person per card (picking another
+-- emoji replaces it). The allowed set lives in routes/cards.ts (REACTIONS).
+CREATE TABLE IF NOT EXISTS card_reactions (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  card_id    uuid NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  user_id    uuid NOT NULL REFERENCES users(id),
+  emoji      text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (card_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS reactions_card_idx ON card_reactions (card_id);
+
 -- A board's decision state: a voting deadline and the chosen winner.
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS decide_by timestamptz;
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS decided_card_id uuid;
@@ -314,6 +327,8 @@ BEGIN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   ELSIF v_entity = 'vote' THEN
     SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
+  ELSIF v_entity = 'reaction' THEN
+    SELECT board_id INTO v_board FROM cards WHERE id = COALESCE(NEW.card_id, OLD.card_id);
   ELSIF v_entity = 'datevote' THEN
     v_board := COALESCE(NEW.board_id, OLD.board_id);
   ELSIF v_entity = 'task' THEN
@@ -369,6 +384,11 @@ DROP TRIGGER IF EXISTS trg_vote_change ON card_votes;
 CREATE TRIGGER trg_vote_change
   AFTER INSERT OR UPDATE OR DELETE ON card_votes
   FOR EACH ROW EXECUTE FUNCTION log_change('vote');
+
+DROP TRIGGER IF EXISTS trg_reaction_change ON card_reactions;
+CREATE TRIGGER trg_reaction_change
+  AFTER INSERT OR UPDATE OR DELETE ON card_reactions
+  FOR EACH ROW EXECUTE FUNCTION log_change('reaction');
 
 DROP TRIGGER IF EXISTS trg_datevote_change ON board_date_votes;
 CREATE TRIGGER trg_datevote_change
